@@ -1,8 +1,14 @@
 import pandas as pd
 import os
 from typing import Dict
+from fastapi import UploadFile
+from datetime import datetime
 from movies_data_pipeline.services.search_service import SearchService
 from movies_data_pipeline.data_access.database import get_session_direct
+import logging
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 class ETLService:
     def __init__(self):
@@ -11,28 +17,44 @@ class ETLService:
         self.gold_base_path = "src/movies_data_pipeline/data_access/data_lake/gold/"
         self.search_service = SearchService()
 
-    def extract(self, file_path: str, file_type: str) -> pd.DataFrame:
+    def extract(self, file: UploadFile) -> pd.DataFrame:
         """
-        Extract data from a source file (CSV, JSON, or PDF) and store as Parquet in the Bronze layer.
+        Extract data from an uploaded file and store it as Parquet in the bronze layer.
 
         Args:
-            file_path (str): Path to the source file.
-            file_type (str): Type of the source file ('csv', 'json', or 'pdf').
+            file (UploadFile): The uploaded file (CSV, JSON, or PDF).
 
         Returns:
-            pd.DataFrame: The extracted DataFrame.
-        """
-        if file_type == "csv":
-            df = pd.read_csv(file_path)
-        elif file_type == "json":
-            df = pd.read_json(file_path)
-        else:
-            raise ValueError("Unsupported file type. Use 'csv', 'json', or 'pdf'.")
+            pd.DataFrame: The extracted DataFrame for further processing.
 
+        Raises:
+            ValueError: If the file type is unsupported or PDF extraction fails.
+        """
+        file_type = file.filename.split(".")[-1].lower()
+
+        if file_type == "csv":
+            df = pd.read_csv(file.file)
+        elif file_type == "json":
+            df = pd.read_json(file.file)
+        else:
+            raise ValueError("Unsupported file type. Use 'csv', 'json', or 'pdf'.") 
+
+        # Add timestamps for tracking
+        current_time = datetime.now()
+        df['created_at'] = current_time
+        df['updated_at'] = current_time
+
+        # Append to existing Parquet file if it exists
         if os.path.exists(self.bronze_path):
             existing_df = pd.read_parquet(self.bronze_path)
+            # Ensure timestamp columns exist in existing data
+            if 'created_at' not in existing_df.columns:
+                existing_df['created_at'] = pd.NaT
+            if 'updated_at' not in existing_df.columns:
+                existing_df['updated_at'] = pd.NaT
             df = pd.concat([existing_df, df], ignore_index=True)
 
+        # Save to bronze layer as Parquet
         df.to_parquet(self.bronze_path, index=False)
         return df
 
@@ -64,13 +86,11 @@ class ETLService:
             if pd.isna(crew_str) or crew_str == "":
                 return []
             crew_list = crew_str.split(", ")
-            # Pair actor_name and character_name, handle odd-length lists
             pairs = []
             for i in range(0, len(crew_list), 2):
                 if i + 1 < len(crew_list):
                     pairs.append({"actor_name": crew_list[i], "character_name": crew_list[i + 1]})
                 else:
-                    # For documentaries or incomplete data, assume "Self" if only one name
                     pairs.append({"actor_name": crew_list[i], "character_name": "Self"})
             return pairs
 
@@ -101,7 +121,6 @@ class ETLService:
                         .merge(dim_country, left_on="country", right_on="country_name")
         dim_movie["movie_id"] = dim_movie.index + 1
         dim_movie = dim_movie[["movie_id", "name", "orig_title", "overview", "status", "crew_pairs", "date_x", "date_id", "language_id", "country_id", "genre_list"]]
-        print("dim_movie date_x:", dim_movie["date_x"].head(5).tolist())
 
         # --- Silver Layer: Bridge Tables ---
         movie_genre_df = dim_movie[["movie_id", "genre_list"]].explode("genre_list").rename(columns={"genre_list": "genre_name"})
@@ -111,17 +130,16 @@ class ETLService:
         bridge_movie_genre["movie_genre_id"] = bridge_movie_genre.index + 1
         bridge_movie_genre = bridge_movie_genre[["movie_genre_id", "movie_id", "genre_id"]]
 
-        # Explode crew_pairs into crew_df
         crew_df = dim_movie[["movie_id", "crew_pairs"]].explode("crew_pairs").reset_index(drop=True)
         crew_df = crew_df.dropna(subset=["crew_pairs"])
         crew_df = pd.concat([crew_df["movie_id"], crew_df["crew_pairs"].apply(pd.Series)], axis=1)
-        crew_df["role"] = "Actor"  # Default role is "Actor"
+        crew_df["role"] = "Actor"
 
         dim_crew = crew_df[["actor_name"]].drop_duplicates().reset_index(drop=True)
         dim_crew.columns = ["crew_name"]
         dim_crew["crew_id"] = dim_crew.index + 1
 
-        dim_role = pd.DataFrame({"role": ["Actor"]}).reset_index(drop=True)  # Default to "Actor"
+        dim_role = pd.DataFrame({"role": ["Actor"]}).reset_index(drop=True)
         dim_role["role_id"] = dim_role.index + 1
 
         bridge_movie_crew = crew_df.merge(dim_crew, left_on="actor_name", right_on="crew_name") \
@@ -145,8 +163,6 @@ class ETLService:
                                 .merge(dim_language, on="language_id", suffixes=('_movie', '_lang')) \
                                 .merge(dim_country, on="country_id", suffixes=('_movie', '_country')) \
                                 .merge(fact_movie_performance, on="movie_id", suffixes=('_movie', '_fact'))
-        print("Columns in movies_to_index:", movies_to_index.columns.tolist())
-        print("Sample date_x in movies_to_index:", movies_to_index["date_x_movie"].head(5).tolist())
 
         genres_by_movie = movies_to_index.groupby("movie_id")["genre_name"].apply(list).reset_index().rename(columns={"genre_name": "genres"})
         crew_by_movie = bridge_movie_crew.merge(dim_crew, on="crew_id").merge(dim_role, on="role_id")
@@ -159,7 +175,6 @@ class ETLService:
 
         for _, row in movies_to_index.iterrows():
             release_date = row["date_x_movie"].strftime("%Y-%m-%d") if pd.notna(row["date_x_movie"]) else "Unknown"
-            print(f"Indexing {row['name']} with release_date: {release_date}")
             movie_dict = {
                 "name": row["name"],
                 "orig_title": row["orig_title"],
@@ -184,10 +199,14 @@ class ETLService:
                                                 .rename(columns={"revenue": "total_revenue"})
 
         merged_df = fact_movie_performance.merge(dim_movie, on="movie_id", suffixes=('_fact', '_movie'))
-        print("Columns after merging fact_movie_performance and dim_movie:", merged_df.columns.tolist())
         avg_score_by_year = merged_df.merge(dim_date, left_on="date_id_movie", right_on="date_id", suffixes=('_movie', '_date')) \
                                     .groupby("year")["score"].mean().reset_index() \
                                     .rename(columns={"score": "avg_score"})
+
+        # Add last_updated timestamp to gold tables
+        current_time = datetime.now()
+        revenue_by_genre['last_updated'] = current_time
+        avg_score_by_year['last_updated'] = current_time
 
         return {
             "silver": {
