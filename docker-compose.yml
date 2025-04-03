@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: warehouse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi_app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src/movies_data_pipeline:/app/movies_data_pipeline
+      - ./src/movies_data_pipeline/data_access/data_lake:/app/movies_data_pipeline/data_access/data_lake
+    depends_on:
+      postgres:
+        condition: service_healthy
+      typesense:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://admin:password@postgres:5432/warehouse
+      - TYPESENSE_HOST=typesense
+      - TYPESENSE_PORT=8108
+      - TYPESENSE_API_KEY=xyz
+    networks:
+      - app_network
+    command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --reload  
+
+  typesense:
+    build:
+      context: .
+      dockerfile: Dockerfile.typesense
+    container_name: typesense_db
+    ports:
+      - "8108:8108"
+    volumes:
+      - typesense_data:/data
+    environment:
+      - TYPESENSE_API_KEY=xyz
+      - TYPESENSE_DATA_DIR=/data
+      - TYPESENSE_ENABLE_CORS=true
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-H", "X-TYPESENSE-API-KEY: xyz", "http://localhost:8108/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  typesense_data:
+
+networks:
+  app_network:
+    driver: bridge

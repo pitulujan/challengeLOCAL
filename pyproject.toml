@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "movies-data-pipeline"
+version = "0.1.0"
+description = "A data engineering project that implements an ETL pipeline, data lake, data warehouse, vector database, and REST API for movies business analysis."
+authors = ["Martin Lujan lujanmartin91@gmail.com"]
+readme = "README.md"
+packages = [{include = "movies_data_pipeline"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.111.0"
+uvicorn = "^0.30.0"
+sqlmodel = "^0.0.18"
+psycopg2-binary = "^2.9.9"
+pandas = "^2.2.3"
+pydantic = "^2.7.4"
+typesense = "^1.0.3"  
+pyarrow = "^17.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+polyfactory = "^2.16.0"
+pylint = "^3.2.0"
+ruff = "^0.5.0"
+mypy = "^1.10.0"
+pandera = "^0.19.0"
+
+[tool.poetry.scripts]
+lint = "scripts:lint"
+typecheck = "scripts:typecheck"
+test = "scripts:test"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
