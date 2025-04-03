@@ -14,10 +14,10 @@ class CrudController:
             """Create a new record in the Bronze layer."""
             return await self.bronze_service.create(data, background_tasks)
 
-        @self.router.get("/{movie_name}")
-        async def read_raw(movie_name: str) -> List[Dict[str, Any]]:
-            """Read a record from the Bronze layer by movie_name."""
-            return await self.bronze_service.read(movie_name)
+        @self.router.get("/{identifier}")
+        async def read_raw(identifier: str) -> List[Dict[str, Any]]:
+            """Read a record from the Bronze layer by UUID or movie name."""
+            return await self.bronze_service.read(identifier)
 
         @self.router.put("/{movie_name}")
         async def update_raw(movie_name: str, data: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:

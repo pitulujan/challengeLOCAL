@@ -4,7 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime
 from movies_data_pipeline.services.etl_service import ETLService
-
+import uuid
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
@@ -44,16 +44,30 @@ class BronzeDataService:
         
         return {"message": "Raw data created, ETL process scheduled"}
 
-    async def read(self, movie_name: str) -> List[Dict[str, Any]]:
+    async def read(self, identifier: str) -> List[Dict[str, Any]]:
+        """Read a record from the Bronze layer by UUID or movie name."""
         df = pd.read_parquet(self.bronze_path)
-        result = df[df["names"] == movie_name]
+        
+        # Determine if the identifier is a UUID
+        try:
+            uuid.UUID(identifier)  # Validate if it's a UUID
+            result = df[df["uuid"] == identifier]
+        except ValueError:
+            # If not a UUID, assume it's a movie name
+            # Check for 'name' or 'names' column
+            name_col = "name" if "name" in df.columns else "names" if "names" in df.columns else None
+            if not name_col:
+                raise HTTPException(status_code=500, detail="No 'name' or 'names' column found in bronze data")
+            result = df[df[name_col] == identifier]
+        
         if result.empty:
             raise HTTPException(status_code=404, detail="Movie not found")
         return result.to_dict(orient="records")
 
     async def update(self, movie_name: str, data: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
         df = pd.read_parquet(self.bronze_path)
-        if not (df["names"] == movie_name).any():
+        name_col = "name" if "name" in df.columns else "names" if "names" in df.columns else None
+        if not name_col or not (df[name_col] == movie_name).any():
             raise HTTPException(status_code=404, detail="Movie not found")
         
         valid_columns = df.columns.tolist()
@@ -63,12 +77,12 @@ class BronzeDataService:
         
         current_time = datetime.now()
         for key, value in data.items():
-            df.loc[df["names"] == movie_name, key] = value
-        df.loc[df["names"] == movie_name, 'updated_at'] = current_time
+            df.loc[df[name_col] == movie_name, key] = value
+        df.loc[df[name_col] == movie_name, 'updated_at'] = current_time
         df.to_parquet(self.bronze_path, index=False)
         
         # Update Typesense immediately with the updated data
-        updated_data = df[df["names"] == movie_name].iloc[0].to_dict()
+        updated_data = df[df[name_col] == movie_name].iloc[0].to_dict()
         self.etl_service.update_typesense("update", updated_data, movie_name)
         # Schedule full ETL in the background
         background_tasks.add_task(self._run_etl)
@@ -77,11 +91,12 @@ class BronzeDataService:
 
     async def delete(self, movie_name: str, background_tasks: BackgroundTasks) -> Dict[str, str]:
         df = pd.read_parquet(self.bronze_path)
-        if "names" not in df.columns:
-            raise KeyError(f"'names' column not found in raw data. Available columns: {df.columns.tolist()}")
-        if not (df["names"] == movie_name).any():
+        name_col = "name" if "name" in df.columns else "names" if "names" in df.columns else None
+        if not name_col:
+            raise KeyError(f"'name' or 'names' column not found in raw data. Available columns: {df.columns.tolist()}")
+        if not (df[name_col] == movie_name).any():
             raise HTTPException(status_code=404, detail="Movie not found")
-        df = df[df["names"] != movie_name]
+        df = df[df[name_col] != movie_name]
         df.to_parquet(self.bronze_path, index=False)
         
         # Update Typesense immediately to mark as deleted

@@ -17,6 +17,7 @@ class VectorDB:
             "name": self.collection_name,
             "enable_nested_fields": True,
             "fields": [
+                {"name": "id", "type": "string"},  # Add UUID as the document ID
                 {"name": "name", "type": "string"},
                 {"name": "orig_title", "type": "string"},
                 {"name": "overview", "type": "string"},
@@ -44,7 +45,7 @@ class VectorDB:
         """
         search_params = {
             "q": query,
-            'query_by': 'name,overview,genres,country,language',
+            "query_by": "name,overview,genres,country,language",
             "per_page": per_page,
             "page": page
         }
@@ -52,7 +53,22 @@ class VectorDB:
         return result["hits"]
 
     def index_movie(self, movie: Dict[str, Any]) -> None:
+        """
+        Index a movie in Typesense, using the 'id' field as the document identifier.
+        """
         try:
-            self.client.collections[self.collection_name].documents.create(movie)
+            if "id" not in movie or not movie["id"]:
+                raise ValueError("Movie document must contain a valid 'id' field (UUID)")
+            # Use upsert to update if the document already exists, or create if it doesn't
+            self.client.collections[self.collection_name].documents.upsert(movie)
         except Exception as e:
-            print(f"Failed to index movie {movie['name']}: {e}")
+            print(f"Failed to index movie {movie.get('name', 'unknown')}: {e}")
+
+    def delete_movie(self, movie_id: str) -> None:
+        """
+        Delete a movie from Typesense by its UUID.
+        """
+        try:
+            self.client.collections[self.collection_name].documents[movie_id].delete()
+        except Exception as e:
+            print(f"Failed to delete movie with ID {movie_id}: {e}")

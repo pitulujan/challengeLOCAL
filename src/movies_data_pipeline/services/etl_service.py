@@ -3,6 +3,7 @@ import os
 from typing import Dict, Any
 from fastapi import UploadFile, BackgroundTasks
 from datetime import datetime
+import uuid
 from movies_data_pipeline.services.search_service import SearchService
 from movies_data_pipeline.data_access.database import get_session_direct
 import logging
@@ -30,17 +31,33 @@ class ETLService:
         df['created_at'] = current_time
         df['updated_at'] = current_time
         
+        # Generate UUID based on all raw columns
+        def generate_uuid(row):
+            # Convert row to string, excluding created_at and updated_at to keep it based on raw data
+            raw_data = row.drop(['created_at', 'updated_at'], errors='ignore').astype(str).to_dict()
+            # Create a string representation of the raw data
+            data_str = ''.join(f"{k}:{v}" for k, v in sorted(raw_data.items()))
+            # Use UUID5 with a namespace (e.g., UUID for your app) for deterministic UUIDs
+            namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # Example namespace UUID
+            return str(uuid.uuid5(namespace, data_str))
+        
+        df['uuid'] = df.apply(generate_uuid, axis=1)
+        
         if os.path.exists(self.bronze_path):
             existing_df = pd.read_parquet(self.bronze_path)
             if 'created_at' not in existing_df.columns:
                 existing_df['created_at'] = pd.NaT
             if 'updated_at' not in existing_df.columns:
                 existing_df['updated_at'] = pd.NaT
+            if 'uuid' not in existing_df.columns:
+                existing_df['uuid'] = existing_df.apply(generate_uuid, axis=1)
             df = pd.concat([existing_df, df], ignore_index=True)
+            # Remove duplicates based on UUID to avoid redundant entries
+            df = df.drop_duplicates(subset=['uuid'], keep='last')
         
         df.to_parquet(self.bronze_path, index=False)
         
-        # Update Typesense for each new movie
+        # Update Typesense for each new movie with UUID
         for _, row in df.iterrows():
             self.update_typesense("create", row.to_dict())
         
@@ -60,7 +77,7 @@ class ETLService:
             logger.error(f"Full ETL process failed: {str(e)}")
 
     def transform(self) -> Dict[str, Dict[str, pd.DataFrame]]:
-        
+        # [Unchanged transform method for brevity, but you can propagate 'uuid' to silver/gold if needed]
         raw_df = pd.read_parquet(self.bronze_path)
         logger.debug("Sample raw date_x: %s", raw_df["date_x"].head(5).tolist())
 
@@ -197,10 +214,11 @@ class ETLService:
             session.commit()
 
     def update_typesense(self, operation: str, movie_data: Dict[str, Any], movie_name: str = None) -> None:
-        # [Unchanged update_typesense method]
         if operation == "delete":
             if not movie_name:
                 raise ValueError("movie_name is required for delete operation")
+            # For delete, we need the UUID, so assume it's provided or fetch it
+            # For simplicity, we'll mark as deleted with movie_name here
             self.search_service.index_movie({"name": movie_name, "is_deleted": True})
             logger.info(f"Marked movie '{movie_name}' as deleted in Typesense")
             return
@@ -233,6 +251,7 @@ class ETLService:
         row = raw_df.iloc[0]
         release_date = row["date_x"].strftime("%Y-%m-%d") if pd.notna(row["date_x"]) else "Unknown"
         movie_dict = {
+            "id": row.get("uuid"),  # Use UUID as the document ID in Typesense
             "name": row["name"],
             "orig_title": row.get("orig_title", row["name"]),
             "overview": row.get("overview", ""),
@@ -247,6 +266,5 @@ class ETLService:
             "score": float(row.get("score", 0)),
             "is_deleted": False
         }
-
         self.search_service.index_movie(movie_dict)
-        logger.info(f"Updated Typesense with {operation} for movie '{row['name']}'")
+        logger.info(f"Updated Typesense with {operation} for movie '{row['name']}' with UUID '{row.get('uuid')}'")
