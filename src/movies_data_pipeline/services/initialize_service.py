@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-from movies_data_pipeline.data_access.database import get_session_direct
 
 def initialize_schemas():
     # Define base directories
