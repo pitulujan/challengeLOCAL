@@ -51,14 +51,30 @@ class ETLService:
         date_col = next((col for col in possible_date_cols if col in raw_df.columns), None)
         if date_col:
             raw_df = raw_df.rename(columns={date_col: "date_x"})
-            raw_df["date_x"] = raw_df["date_x"].str.strip()  # Remove leading/trailing spaces
+            raw_df["date_x"] = raw_df["date_x"].str.strip()
             raw_df["date_x"] = pd.to_datetime(raw_df["date_x"], format="%m/%d/%Y", errors="coerce")
             print("Parsed date_x:", raw_df["date_x"].head(5).tolist())
         else:
             raise KeyError("Input data must contain a date column ('date_x', 'release_date', or 'date')")
 
         raw_df["genre_list"] = raw_df["genre"].str.split(",\s+")
-        raw_df["crew_list"] = raw_df["crew"].str.split(",\s+").fillna("").apply(lambda x: [] if x == "" else x)
+
+        # --- Parse crew data correctly ---
+        def parse_crew(crew_str):
+            if pd.isna(crew_str) or crew_str == "":
+                return []
+            crew_list = crew_str.split(", ")
+            # Pair actor_name and character_name, handle odd-length lists
+            pairs = []
+            for i in range(0, len(crew_list), 2):
+                if i + 1 < len(crew_list):
+                    pairs.append({"actor_name": crew_list[i], "character_name": crew_list[i + 1]})
+                else:
+                    # For documentaries or incomplete data, assume "Self" if only one name
+                    pairs.append({"actor_name": crew_list[i], "character_name": "Self"})
+            return pairs
+
+        raw_df["crew_pairs"] = raw_df["crew"].apply(parse_crew)
 
         # --- Silver Layer: Dimension Tables ---
         dim_date = raw_df[["date_x"]].drop_duplicates().reset_index(drop=True)
@@ -81,10 +97,10 @@ class ETLService:
         dim_country["country_id"] = dim_country.index + 1
 
         dim_movie = raw_df.merge(dim_date, on="date_x", suffixes=('_raw', '_date')) \
-                          .merge(dim_language, left_on="orig_lang", right_on="language_name") \
-                          .merge(dim_country, left_on="country", right_on="country_name")
+                        .merge(dim_language, left_on="orig_lang", right_on="language_name") \
+                        .merge(dim_country, left_on="country", right_on="country_name")
         dim_movie["movie_id"] = dim_movie.index + 1
-        dim_movie = dim_movie[["movie_id", "name", "orig_title", "overview", "status", "crew_list", "date_x", "date_id", "language_id", "country_id", "genre_list"]]
+        dim_movie = dim_movie[["movie_id", "name", "orig_title", "overview", "status", "crew_pairs", "date_x", "date_id", "language_id", "country_id", "genre_list"]]
         print("dim_movie date_x:", dim_movie["date_x"].head(5).tolist())
 
         # --- Silver Layer: Bridge Tables ---
@@ -95,20 +111,23 @@ class ETLService:
         bridge_movie_genre["movie_genre_id"] = bridge_movie_genre.index + 1
         bridge_movie_genre = bridge_movie_genre[["movie_genre_id", "movie_id", "genre_id"]]
 
-        crew_df = dim_movie[["movie_id", "crew_list"]].explode("crew_list").rename(columns={"crew_list": "crew_info"})
-        crew_df = crew_df.dropna(subset=["crew_info"])
-        crew_df = crew_df[crew_df["crew_info"] != ""]
-        crew_df[["crew_name", "role"]] = crew_df["crew_info"].str.split(", ", expand=True).reindex(columns=[0, 1], fill_value="Unknown")
+        # Explode crew_pairs into crew_df
+        crew_df = dim_movie[["movie_id", "crew_pairs"]].explode("crew_pairs").reset_index(drop=True)
+        crew_df = crew_df.dropna(subset=["crew_pairs"])
+        crew_df = pd.concat([crew_df["movie_id"], crew_df["crew_pairs"].apply(pd.Series)], axis=1)
+        crew_df["role"] = "Actor"  # Default role is "Actor"
 
-        dim_crew = crew_df[["crew_name"]].drop_duplicates().reset_index(drop=True)
+        dim_crew = crew_df[["actor_name"]].drop_duplicates().reset_index(drop=True)
+        dim_crew.columns = ["crew_name"]
         dim_crew["crew_id"] = dim_crew.index + 1
 
-        dim_role = crew_df[["role"]].drop_duplicates().reset_index(drop=True)
+        dim_role = pd.DataFrame({"role": ["Actor"]}).reset_index(drop=True)  # Default to "Actor"
         dim_role["role_id"] = dim_role.index + 1
 
-        bridge_movie_crew = crew_df.merge(dim_crew, on="crew_name").merge(dim_role, on="role")
+        bridge_movie_crew = crew_df.merge(dim_crew, left_on="actor_name", right_on="crew_name") \
+                                .merge(dim_role, on="role")
         bridge_movie_crew["movie_crew_id"] = bridge_movie_crew.index + 1
-        bridge_movie_crew = bridge_movie_crew[["movie_crew_id", "movie_id", "crew_id", "role_id", "crew_info"]].rename(columns={"crew_info": "character_name"})
+        bridge_movie_crew = bridge_movie_crew[["movie_crew_id", "movie_id", "crew_id", "role_id", "character_name"]]
 
         # --- Silver Layer: Fact Table ---
         fact_movie_performance = raw_df.merge(dim_movie, on=["name", "date_x", "orig_title"])
@@ -121,11 +140,11 @@ class ETLService:
 
         # --- Index Movies into Typesense ---
         movies_to_index = dim_movie.merge(bridge_movie_genre, on="movie_id", suffixes=('_movie', '_bridge')) \
-                                   .merge(dim_genre, on="genre_id", suffixes=('_movie', '_genre')) \
-                                   .merge(dim_date, on="date_id", suffixes=('_movie', '_date')) \
-                                   .merge(dim_language, on="language_id", suffixes=('_movie', '_lang')) \
-                                   .merge(dim_country, on="country_id", suffixes=('_movie', '_country')) \
-                                   .merge(fact_movie_performance, on="movie_id", suffixes=('_movie', '_fact'))
+                                .merge(dim_genre, on="genre_id", suffixes=('_movie', '_genre')) \
+                                .merge(dim_date, on="date_id", suffixes=('_movie', '_date')) \
+                                .merge(dim_language, on="language_id", suffixes=('_movie', '_lang')) \
+                                .merge(dim_country, on="country_id", suffixes=('_movie', '_country')) \
+                                .merge(fact_movie_performance, on="movie_id", suffixes=('_movie', '_fact'))
         print("Columns in movies_to_index:", movies_to_index.columns.tolist())
         print("Sample date_x in movies_to_index:", movies_to_index["date_x_movie"].head(5).tolist())
 
@@ -139,7 +158,6 @@ class ETLService:
         movies_to_index = movies_to_index.drop_duplicates(subset=["movie_id"]).merge(genres_by_movie, on="movie_id").merge(crew_by_movie, on="movie_id")
 
         for _, row in movies_to_index.iterrows():
-            # Use 'date_x_movie' explicitly, fallback to 'date_x' if needed
             release_date = row["date_x_movie"].strftime("%Y-%m-%d") if pd.notna(row["date_x_movie"]) else "Unknown"
             print(f"Indexing {row['name']} with release_date: {release_date}")
             movie_dict = {
