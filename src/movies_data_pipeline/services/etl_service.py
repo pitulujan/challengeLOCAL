@@ -38,6 +38,7 @@ class ETLService:
 
     def transform(self) -> Dict[str, Dict[str, pd.DataFrame]]:
         raw_df = pd.read_parquet(self.bronze_path)
+        print("Sample raw date_x:", raw_df["date_x"].head(5).tolist())
 
         # Standardize column names
         if "names" in raw_df.columns and "name" not in raw_df.columns:
@@ -45,11 +46,14 @@ class ETLService:
         elif "name" not in raw_df.columns:
             raise KeyError("Input data must contain a 'name' or 'names' column for movie titles.")
 
+        # Robust date parsing
         possible_date_cols = ["date_x", "release_date", "date"]
         date_col = next((col for col in possible_date_cols if col in raw_df.columns), None)
         if date_col:
             raw_df = raw_df.rename(columns={date_col: "date_x"})
+            raw_df["date_x"] = raw_df["date_x"].str.strip()  # Remove leading/trailing spaces
             raw_df["date_x"] = pd.to_datetime(raw_df["date_x"], format="%m/%d/%Y", errors="coerce")
+            print("Parsed date_x:", raw_df["date_x"].head(5).tolist())
         else:
             raise KeyError("Input data must contain a date column ('date_x', 'release_date', or 'date')")
 
@@ -77,10 +81,11 @@ class ETLService:
         dim_country["country_id"] = dim_country.index + 1
 
         dim_movie = raw_df.merge(dim_date, on="date_x", suffixes=('_raw', '_date')) \
-                        .merge(dim_language, left_on="orig_lang", right_on="language_name") \
-                        .merge(dim_country, left_on="country", right_on="country_name")
+                          .merge(dim_language, left_on="orig_lang", right_on="language_name") \
+                          .merge(dim_country, left_on="country", right_on="country_name")
         dim_movie["movie_id"] = dim_movie.index + 1
         dim_movie = dim_movie[["movie_id", "name", "orig_title", "overview", "status", "crew_list", "date_x", "date_id", "language_id", "country_id", "genre_list"]]
+        print("dim_movie date_x:", dim_movie["date_x"].head(5).tolist())
 
         # --- Silver Layer: Bridge Tables ---
         movie_genre_df = dim_movie[["movie_id", "genre_list"]].explode("genre_list").rename(columns={"genre_list": "genre_name"})
@@ -116,11 +121,13 @@ class ETLService:
 
         # --- Index Movies into Typesense ---
         movies_to_index = dim_movie.merge(bridge_movie_genre, on="movie_id", suffixes=('_movie', '_bridge')) \
-                                .merge(dim_genre, on="genre_id", suffixes=('_movie', '_genre')) \
-                                .merge(dim_date, on="date_id", suffixes=('_movie', '_date')) \
-                                .merge(dim_language, on="language_id", suffixes=('_movie', '_lang')) \
-                                .merge(dim_country, on="country_id", suffixes=('_movie', '_country')) \
-                                .merge(fact_movie_performance, on="movie_id", suffixes=('_movie', '_fact'))
+                                   .merge(dim_genre, on="genre_id", suffixes=('_movie', '_genre')) \
+                                   .merge(dim_date, on="date_id", suffixes=('_movie', '_date')) \
+                                   .merge(dim_language, on="language_id", suffixes=('_movie', '_lang')) \
+                                   .merge(dim_country, on="country_id", suffixes=('_movie', '_country')) \
+                                   .merge(fact_movie_performance, on="movie_id", suffixes=('_movie', '_fact'))
+        print("Columns in movies_to_index:", movies_to_index.columns.tolist())
+        print("Sample date_x in movies_to_index:", movies_to_index["date_x_movie"].head(5).tolist())
 
         genres_by_movie = movies_to_index.groupby("movie_id")["genre_name"].apply(list).reset_index().rename(columns={"genre_name": "genres"})
         crew_by_movie = bridge_movie_crew.merge(dim_crew, on="crew_id").merge(dim_role, on="role_id")
@@ -132,12 +139,15 @@ class ETLService:
         movies_to_index = movies_to_index.drop_duplicates(subset=["movie_id"]).merge(genres_by_movie, on="movie_id").merge(crew_by_movie, on="movie_id")
 
         for _, row in movies_to_index.iterrows():
+            # Use 'date_x_movie' explicitly, fallback to 'date_x' if needed
+            release_date = row["date_x_movie"].strftime("%Y-%m-%d") if pd.notna(row["date_x_movie"]) else "Unknown"
+            print(f"Indexing {row['name']} with release_date: {release_date}")
             movie_dict = {
                 "name": row["name"],
                 "orig_title": row["orig_title"],
                 "overview": row["overview"],
                 "status": row["status"],
-                "release_date": row["date_x_movie"].strftime("%Y-%m-%d") if pd.notna(row["date_x_movie"]) else "Unknown",
+                "release_date": release_date,
                 "genres": row["genres"],
                 "crew": row["crew_entry"],
                 "country": row["country_name"],
@@ -155,7 +165,6 @@ class ETLService:
                                                 .groupby("genre_name")["revenue"].sum().reset_index() \
                                                 .rename(columns={"revenue": "total_revenue"})
 
-        # Fix merge for avg_score_by_year
         merged_df = fact_movie_performance.merge(dim_movie, on="movie_id", suffixes=('_fact', '_movie'))
         print("Columns after merging fact_movie_performance and dim_movie:", merged_df.columns.tolist())
         avg_score_by_year = merged_df.merge(dim_date, left_on="date_id_movie", right_on="date_id", suffixes=('_movie', '_date')) \
