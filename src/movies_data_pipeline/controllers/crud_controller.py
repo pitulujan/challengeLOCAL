@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 import pandas as pd
+import os
 from typing import Dict, Any, List
 
 class CrudController:
@@ -19,32 +20,36 @@ class CrudController:
             df.to_parquet(self.bronze_path, index=False)
             return {"message": "Raw data created"}
 
-        @self.router.get("/{movie_id}")
-        def read_raw(movie_id: int) -> List[Dict[str, Any]]:
-            """Read a record from the Bronze layer by movie_id."""
+        @self.router.get("/{movie_name}")
+        def read_raw(movie_name: str) -> List[Dict[str, Any]]:
+            """Read a record from the Bronze layer by movie_name."""
             df = pd.read_parquet(self.bronze_path)
-            result = df[df["movie_id"] == movie_id]
+            result = df[df["names"] == movie_name]
             if result.empty:
                 raise HTTPException(status_code=404, detail="Movie not found")
             return result.to_dict(orient="records")
 
-        @self.router.put("/{movie_id}")
-        def update_raw(movie_id: int, data: Dict[str, Any]) -> Dict[str, str]:
-            """Update a record in the Bronze layer by movie_id."""
+        @self.router.put("/{movie_name}")
+        def update_raw(movie_name: str, data: Dict[str, Any]) -> Dict[str, str]:
+            """Update a record in the Bronze layer by movie_name."""
             df = pd.read_parquet(self.bronze_path)
-            if not (df["movie_id"] == movie_id).any():
+            if 'name' not in df.columns:
+                raise KeyError(f"'name' column not found in raw data. Available columns: {df.columns.tolist()}")
+            if not (df["name"] == movie_name).any():
                 raise HTTPException(status_code=404, detail="Movie not found")
             for key, value in data.items():
-                df.loc[df["movie_id"] == movie_id, key] = value
+                df.loc[df["name"] == movie_name, key] = value
             df.to_parquet(self.bronze_path, index=False)
             return {"message": "Raw data updated"}
 
-        @self.router.delete("/{movie_id}")
-        def delete_raw(movie_id: int) -> Dict[str, str]:
-            """Delete a record from the Bronze layer by movie_id."""
+        @self.router.delete("/{movie_name}")
+        def delete_raw(movie_name: str) -> Dict[str, str]:
+            """Delete a record from the Bronze layer by movie_name."""
             df = pd.read_parquet(self.bronze_path)
-            if not (df["movie_id"] == movie_id).any():
+            if 'name' not in df.columns:
+                raise KeyError(f"'name' column not found in raw data. Available columns: {df.columns.tolist()}")
+            if not (df["name"] == movie_name).any():
                 raise HTTPException(status_code=404, detail="Movie not found")
-            df = df[df["movie_id"] != movie_id]
+            df = df[df["name"] != movie_name]
             df.to_parquet(self.bronze_path, index=False)
             return {"message": "Raw data deleted"}

@@ -5,7 +5,7 @@ from movies_data_pipeline.domain.models.movie import Movie
 
 class SearchService:
     def __init__(self):
-        self.vector_db = VectorDB()
+        self.vector_db = VectorDB(initialize=False)  # Don’t reinitialize
 
     def search_movies(self, query: str, limit: int = 10, offset: int = 0) -> List[Movie]:
         """
@@ -19,7 +19,13 @@ class SearchService:
         movies = []
         for hit in hits:
             doc = hit['document']
-            release_date = datetime.strptime(doc['release_date'], "%Y-%m-%d").date()
+            release_date_str = doc['release_date']
+            # Handle 'Unknown' or invalid date strings
+            try:
+                release_date = datetime.strptime(release_date_str, "%Y-%m-%d").date() if release_date_str != "Unknown" else None
+            except ValueError:
+                release_date = None  # Set to None if parsing fails for any reason
+
             movie = Movie(
                 name=doc['name'],
                 orig_title=doc.get('orig_title', doc['name']),  # Fallback to name if orig_title not provided

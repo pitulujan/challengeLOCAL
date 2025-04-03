@@ -2,17 +2,17 @@ import typesense
 from typing import List, Dict, Any
 
 class VectorDB:
-    def __init__(self):
+    def __init__(self, initialize=False):
         self.client = typesense.Client({
             "nodes": [{"host": "typesense", "port": "8108", "protocol": "http"}],
             "api_key": "xyz",
             "connection_timeout_seconds": 2
         })
         self.collection_name = "movies"
-        self._initialize_collection()
+        if initialize:
+            self._initialize_collection()
 
     def _initialize_collection(self) -> None:
-        """Initialize the Typesense collection for movies."""
         schema = {
             "name": self.collection_name,
             "enable_nested_fields": True,
@@ -52,10 +52,7 @@ class VectorDB:
         return result["hits"]
 
     def index_movie(self, movie: Dict[str, Any]) -> None:
-        """
-        Index a single movie in Typesense.
-
-        Args:
-            movie (Dict[str, Any]): Movie data to index.
-        """
-        self.client.collections[self.collection_name].documents.create(movie)
+        try:
+            self.client.collections[self.collection_name].documents.create(movie)
+        except Exception as e:
+            print(f"Failed to index movie {movie['name']}: {e}")

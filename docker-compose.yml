@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: warehouse
+      POSTGRES_DB: gold
     ports:
       - "5432:5432"
     volumes:
@@ -15,7 +15,7 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d warehouse"]
+      test: ["CMD-SHELL", "pg_isready -U admin -d gold"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -36,7 +36,7 @@ services:
       typesense:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://admin:password@postgres:5432/warehouse
+      - DATABASE_URL=postgresql://admin:password@postgres:5432/gold
       - TYPESENSE_HOST=typesense
       - TYPESENSE_PORT=8108
       - TYPESENSE_API_KEY=xyz

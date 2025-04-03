@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from movies_data_pipeline.services.etl_service import ETLService
+import os
 
 class SeedController:
     def __init__(self):

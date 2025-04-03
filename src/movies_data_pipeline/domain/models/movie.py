@@ -2,20 +2,21 @@ from typing import List, Optional
 from datetime import date
 from pydantic import BaseModel
 
+
 class Movie(BaseModel):
     name: str
     orig_title: str
     overview: str
     status: str
-    release_date: date
+    release_date: Optional[date] = None  # Allow None
     genres: List[str]
-    crew: List[dict]  # List of {"name": str, "role_name": str, "character_name": Optional[str]}
+    crew: List[dict]
     country: str
     language: str
     budget: float
     revenue: float
     score: float
-    is_deleted: bool = False
+    is_deleted: bool
 
     def calculate_profit(self) -> float:
         """Calculate the profit of the movie."""
