@@ -59,7 +59,7 @@ services:
       - TYPESENSE_API_KEY=xyz
     networks:
       - app_network
-    command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --reload  
+    command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --log-level info  
 
   typesense:
     build:

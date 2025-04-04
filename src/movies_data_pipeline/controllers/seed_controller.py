@@ -1,7 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from movies_data_pipeline.services.etl_service import ETLService
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 import os
 import shutil
+import logging
+from movies_data_pipeline.services.etl_service import ETLService
+
+logger = logging.getLogger(__name__)
 
 class SeedController:
     def __init__(self):
@@ -12,38 +15,33 @@ class SeedController:
 
     def _register_routes(self):
         @self.router.post("/")
-        async def seed_data(file: UploadFile = File(...)):
-            """
-            Seed data by uploading a file (CSV or JSON), saving it to the bronze layer,
-            and running the ETL pipeline.
-
-            Args:
-                file (UploadFile): The uploaded file.
-
-            Returns:
-                dict: Success message.
-
-            Raises:
-                HTTPException: If the file type is unsupported or processing fails.
-            """
-            # Check file type
+        async def seed_data(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
             file_type = file.filename.split(".")[-1].lower()
             if file_type not in ["csv", "json", "pdf"]:
                 raise HTTPException(status_code=400, detail="Unsupported file type. Use 'csv', 'json', or 'pdf'.")
-
-            # Ensure bronze directory exists
+            
             os.makedirs(self.bronze_dir, exist_ok=True)
-
-            # Save the file to the bronze layer directory
             file_path = os.path.join(self.bronze_dir, file.filename)
+            
             try:
                 with open(file_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
+                logger.debug(f"File saved to {file_path}")
+                
+                logger.info(f"Scheduling ETL for {file_path} in background")
+                background_tasks.add_task(self.run_etl_in_background, file_path)
+                return {"message": "Data seeding started in the background"}
+            except Exception as e:
+                logger.error(f"Failed to process file {file.filename}: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to initiate seeding: {str(e)}")
 
-                # Pass the file path to ETLService
-                self.etl_service.extract(file_path=file_path)
-                transformed_data = self.etl_service.transform()
-                self.etl_service.load(transformed_data)
-                return {"message": "Data seeded successfully"}
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+    def run_etl_in_background(self, file_path: str):
+        """Run the full ETL process in the background."""
+        try:
+            logger.info(f"Starting background ETL for {file_path}")
+            self.etl_service.extract(file_path)  # Extract and index
+            self.etl_service._run_full_etl()     # Transform and load
+            logger.info(f"Background ETL completed for {file_path}")
+        except Exception as e:
+            logger.error(f"Background ETL failed for {file_path}: {str(e)}")
+            raise

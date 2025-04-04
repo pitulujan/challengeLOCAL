@@ -3,6 +3,10 @@ from movies_data_pipeline.api.routes import seed, crud, gold, search
 from movies_data_pipeline.data_access.vector_db import VectorDB
 from movies_data_pipeline.data_access.database import init_db
 from movies_data_pipeline.services.initialize_service import initialize_schemas
+import logging
+logging.getLogger("python_multipart").setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
+logging.getLogger().setLevel(logging.INFO)  
 
 app = FastAPI()
 
