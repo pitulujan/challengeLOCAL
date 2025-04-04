@@ -1,11 +1,13 @@
 import pandas as pd
-from typing import Dict, Any
-from fastapi import UploadFile, BackgroundTasks
+from typing import Dict, Any, List
+from fastapi import UploadFile,HTTPException
 import logging
 from .extractor_service import Extractor
 from .transformer_service import Transformer
 from .loader_service import Loader
 from .search_service_adapter import SearchServiceAdapter
+from movies_data_pipeline.data_access.vector_db import VectorDB
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ class ETLService:
         self.transformer = Transformer(self.bronze_path)
         self.loader = Loader(self.silver_base_path, self.gold_base_path)
         self.search_adapter = SearchServiceAdapter(self.bronze_path)
+        self.vector_db = VectorDB(initialize=False)
         self._exceptions = []
 
     def extract(self, file_path: str, batch_size: int = 10000) -> pd.DataFrame:
@@ -103,3 +106,18 @@ class ETLService:
         except Exception as e:
             logger.error(f"Search index synchronization failed: {str(e)}")
             raise
+
+    def batch_update_typesense(self, updates: List[Dict[str, Any]]):
+        """Batch update documents in Typesense."""
+        try:
+            
+            updates_jsonl = "\n".join(json.dumps(update) for update in updates)
+            # Use VectorDB's client to perform the batch import
+            self.vector_db.client.collections[self.vector_db.collection_name].documents.import_(
+                updates_jsonl,
+                {"action": "update", "dirty_values": "coerce_or_drop"}
+            )
+            logger.info(f"Batched {len(updates)} updates to Typesense")
+        except Exception as e:
+            logger.error(f"Failed to batch update Typesense: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Typesense batch update failed: {str(e)}")

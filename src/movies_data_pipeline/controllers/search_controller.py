@@ -25,9 +25,3 @@ class SearchController:
             """
             movies = self.search_service.search_movies(query, limit, offset)
             return movies
-
-        @self.router.post("/index")
-        def index_movies() -> dict:
-            """Index movies into Typesense."""
-            # Note: Indexing is now handled by ETLService after transformation
-            return {"message": "Indexing should be triggered via ETL pipeline"}

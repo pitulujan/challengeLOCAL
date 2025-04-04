@@ -1,5 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks
-from typing import Dict, Any, List
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from typing import Dict, Any, List, Tuple
 from movies_data_pipeline.services.bronze_data_service import BronzeDataService
 
 class CrudController:
@@ -19,10 +19,14 @@ class CrudController:
             """Read a record from the Bronze layer by UUID or movie name."""
             return await self.bronze_service.read(identifier)
 
-        @self.router.put("/{movie_name}")
-        async def update_raw(movie_name: str, data: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
-            """Update a record in the Bronze layer by movie_name."""
-            return await self.bronze_service.update(movie_name, data, background_tasks)
+        @self.router.put("/")
+        async def update_raw(updates: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+            """Update one or multiple records in the Bronze layer by UUID or movie name."""
+            result = await self.bronze_service.update(updates, background_tasks)
+            return {
+                "message": result["message"],
+                "updated_records": result["updated_records"]
+            }
 
         @self.router.delete("/{movie_name}")
         async def delete_raw(movie_name: str, background_tasks: BackgroundTasks) -> Dict[str, str]:
