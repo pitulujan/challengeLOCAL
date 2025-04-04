@@ -10,7 +10,7 @@ class CrudController:
 
     def _register_routes(self):
         @self.router.post("/")
-        async def create_raw(data: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, str]:
+        async def create_raw(data: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, str]:
             """Create a new record in the Bronze layer."""
             return await self.bronze_service.create(data, background_tasks)
 
