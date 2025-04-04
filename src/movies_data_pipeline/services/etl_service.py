@@ -3,8 +3,6 @@ from typing import Dict, Any
 from fastapi import UploadFile, BackgroundTasks
 import logging
 import threading
-from movies_data_pipeline.services.search_service import SearchService
-
 from .extractor_service import Extractor
 from .transformer_service import Transformer
 from .loader_service import Loader

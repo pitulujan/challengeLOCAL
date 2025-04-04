@@ -291,8 +291,8 @@ class Transformer:
         
         # Add metadata
         current_time = datetime.now()
-        revenue_by_genre['last_updated'] = current_time
-        avg_score_by_year['last_updated'] = current_time
+        revenue_by_genre['updated_at'] = current_time
+        avg_score_by_year['updated_at'] = current_time
         
         return {
             "revenue_by_genre": revenue_by_genre,
