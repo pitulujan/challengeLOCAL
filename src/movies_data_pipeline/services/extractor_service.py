@@ -18,41 +18,64 @@ class Extractor:
         """
         self.bronze_path = bronze_path
     
-    def extract(self, file: UploadFile) -> pd.DataFrame:
-        """Extract data from uploaded file and save to bronze layer.
+    def extract(self, file: UploadFile, batch_size: int = 1000) -> pd.DataFrame:
+        """Extract data from uploaded file in batches and save to bronze layer.
         
         Args:
             file: FastAPI UploadFile containing CSV or JSON data
+            batch_size: Number of rows to process in each batch
             
         Returns:
-            DataFrame containing the extracted and standardized data
-            
-        Raises:
-            ValueError: If file type is not supported
+            DataFrame containing the extracted and standardized data (full dataset)
         """
         try:
             file_type = file.filename.split(".")[-1].lower()
+            full_df = pd.DataFrame()  # To store the entire dataset for return
+            
             if file_type == "csv":
-                df = pd.read_csv(file.file)
+                # Process CSV in chunks
+                for chunk in pd.read_csv(file.file, chunksize=batch_size):
+                    df_chunk = self._process_chunk(chunk)
+                    full_df = pd.concat([full_df, df_chunk], ignore_index=True)
+                    self._save_to_bronze(df_chunk)
             elif file_type == "json":
+                # JSON files are typically smaller; process as a whole
                 df = pd.read_json(file.file)
+                df = self._process_chunk(df)
+                full_df = df
+                self._save_to_bronze(df)
             else:
                 raise ValueError("Unsupported file type. Use 'csv' or 'json'.")
             
-            # Standardize column names
-            df = self._standardize_columns(df)
-            
-            # Add metadata
-            df = self._add_metadata(df)
-            
-            # Save to bronze layer
-            self._save_to_bronze(df)
-            
-            return df
+            logger.info(f"Extracted and saved {len(full_df)} records from {file.filename}")
+            return full_df
             
         except Exception as e:
             logger.error(f"Extraction failed: {str(e)}")
             raise
+    
+    def _process_chunk(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process a chunk of data: standardize columns, handle data issues, and add metadata.
+        
+        Args:
+            df: Input dataframe chunk
+            
+        Returns:
+            Processed DataFrame chunk
+        """
+        # Standardize column names
+        df = self._standardize_columns(df)
+
+        # Ensure genre and crew columns are string type
+        if "genre" in df.columns:
+            df["genre"] = df["genre"].astype(str).replace("nan", "")
+        if "crew" in df.columns:
+            df["crew"] = df["crew"].astype(str).replace("nan", "")
+        
+        # Add metadata
+        df = self._add_metadata(df)
+        
+        return df
     
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Standardize column names in the dataframe.
@@ -104,16 +127,16 @@ class Extractor:
         return str(uuid.uuid5(namespace, data_str))
     
     def _save_to_bronze(self, df: pd.DataFrame) -> None:
-        """Save dataframe to bronze layer, handling duplicates.
+        """Save dataframe to bronze layer, handling duplicates incrementally.
         
         Args:
-            df: DataFrame to save
+            df: DataFrame chunk to save
         """
         if os.path.exists(self.bronze_path):
             existing_df = pd.read_parquet(self.bronze_path)
             existing_df = self._standardize_columns(existing_df)
             
-            # Ensure required columns exist
+            # Ensure required columns exist in existing data
             for col in ['created_at', 'updated_at', 'uuid']:
                 if col not in existing_df.columns:
                     if col == 'uuid':
@@ -126,7 +149,7 @@ class Extractor:
             df = df.drop_duplicates(subset=['uuid'], keep='last')
         
         df.to_parquet(self.bronze_path, index=False)
-        logger.info(f"Saved {len(df)} records to bronze layer")
+        logger.debug(f"Saved {len(df)} records to bronze layer (including existing)")
 
     def load_bronze_data(self) -> pd.DataFrame:
         """Load and standardize data from the bronze layer.
@@ -148,29 +171,40 @@ class Extractor:
             return df
         return pd.DataFrame()  # Return empty DataFrame if no data exists
 
-    def extract_from_dicts(self, data_list: List[Dict[str, Any]]) -> pd.DataFrame:
-        """Extract data from a list of dictionaries and save to bronze layer.
+    def extract_from_dicts(self, data_list: List[Dict[str, Any]], batch_size: int = 1000) -> pd.DataFrame:
+        """Extract data from a list of dictionaries in batches and save to bronze layer.
         
         Args:
             data_list: List of dictionaries containing data
+            batch_size: Number of records to process in each batch
             
         Returns:
             DataFrame containing only the newly added rows
         """
-        df_new = pd.DataFrame(data_list)
-        df_new = self._standardize_columns(df_new)
-        df_new = self._add_metadata(df_new)
-        
+        full_new_df = pd.DataFrame()  # To store all new rows
         existing_df = self.load_bronze_data()
         
-        # Combine with existing data and handle duplicates
-        df_combined = pd.concat([existing_df, df_new], ignore_index=True)
-        df_combined = df_combined.drop_duplicates(subset=['uuid'], keep='last')
+        # Process in batches
+        for i in range(0, len(data_list), batch_size):
+            batch = data_list[i:i + batch_size]
+            df_new = pd.DataFrame(batch)
+            df_new = self._standardize_columns(df_new)
+            df_new = self._add_metadata(df_new)
+            
+            # Combine with existing data and handle duplicates
+            df_combined = pd.concat([existing_df, df_new], ignore_index=True)
+            df_combined = df_combined.drop_duplicates(subset=['uuid'], keep='last')
+            
+            # Save the combined data
+            df_combined.to_parquet(self.bronze_path, index=False)
+            
+            # Identify new rows in this batch
+            new_uuids = set(df_new['uuid']) - set(existing_df['uuid'])
+            new_rows = df_combined[df_combined['uuid'].isin(new_uuids)]
+            full_new_df = pd.concat([full_new_df, new_rows], ignore_index=True)
+            
+            # Update existing_df for the next batch
+            existing_df = df_combined
         
-        # Save the combined data
-        df_combined.to_parquet(self.bronze_path, index=False)
-        
-        # Return only the new rows (those not in existing_df)
-        new_uuids = set(df_new['uuid']) - set(existing_df['uuid'])
-        new_rows = df_combined[df_combined['uuid'].isin(new_uuids)]
-        return new_rows
+        logger.info(f"Extracted {len(full_new_df)} new records from {len(data_list)} dictionaries")
+        return full_new_df

@@ -101,7 +101,7 @@ class Transformer:
             df = df.rename(columns={date_col: "date_x"})
             df["date_x"] = df["date_x"].str.strip()
             df["date_x"] = pd.to_datetime(df["date_x"], format="%m/%d/%Y", errors="coerce")
-            logger.debug("Parsed date_x: %s", df["date_x"].head(5).tolist())
+
         else:
             raise KeyError("Input data must contain a date column ('date_x', 'release_date', or 'date')")
         

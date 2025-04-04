@@ -10,7 +10,7 @@ class SearchService:
     def search_movies(self, query: str, limit: int = 10, offset: int = 0) -> List[Movie]:
         """
         Search movies in Typesense by query.
-        Supports pagination with limit and offset.
+        Supports pagination with limit and offset, casting results to Movie model.
         """
         page = (offset // limit) + 1
         per_page = limit
@@ -38,17 +38,28 @@ class SearchService:
                 budget=doc.get('budget', 0.0),
                 revenue=doc.get('revenue', 0.0),
                 score=doc['score'],
-                is_deleted=doc.get('is_deleted', False)  
+                is_deleted=doc.get('is_deleted', False)
             )
             movies.append(movie)
         return movies
 
-    def index_movie(self, movie: Dict[str, Any]):
-        """Index or update a movie in Typesense using its UUID as the id."""
+    def index_movie(self, movie: Dict[str, Any]) -> None:
+        """Index or update a single movie in Typesense using its UUID as the id."""
         if "id" not in movie or not movie["id"]:
             raise ValueError("Movie data must include a valid 'id' (UUID)")
         self.vector_db.index_movie(movie)
 
-    def delete_movie(self, movie_id: str):
+    def batch_index_movies(self, movies: List[Dict[str, Any]]) -> None:
+        """Batch index or update multiple movies in Typesense."""
+        for movie in movies:
+            if "id" not in movie or not movie["id"]:
+                raise ValueError(f"Movie data must include a valid 'id' (UUID): {movie}")
+        self.vector_db.batch_index_movies(movies)
+
+    def delete_movie(self, movie_id: str) -> None:
         """Delete a movie from Typesense by its UUID."""
         self.vector_db.delete_movie(movie_id)
+
+    def clear_index(self) -> None:
+        """Clear the Typesense index and reinitialize it."""
+        self.vector_db._initialize_collection()

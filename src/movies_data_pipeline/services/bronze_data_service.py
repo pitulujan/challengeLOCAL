@@ -15,7 +15,7 @@ class BronzeDataService:
     def __init__(self, bronze_path: str):
             """Initialize the BronzeDataService with the bronze layer path and ETLService."""
             self.bronze_path = bronze_path
-            self.etl_service = ETLService(bronze_path=self.bronze_path)
+            self.etl_service = ETLService()
 
     def _run_etl(self):
         """Run the full ETL process in the background using ETLService."""

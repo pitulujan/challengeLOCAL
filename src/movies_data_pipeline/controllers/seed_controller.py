@@ -11,7 +11,7 @@ class SeedController:
         @self.router.post("/")
         async def seed_data(file: UploadFile = File(...)):
             """
-            Seed data by uploading a file (CSV, JSON, or PDF) and running the ETL pipeline.
+            Seed data by uploading a file (CSV or JSON) and running the ETL pipeline.
 
             Args:
                 file (UploadFile): The uploaded file.
