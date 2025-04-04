@@ -23,40 +23,26 @@ class ETLService:
         self.transformer = Transformer(self.bronze_path)
         self.loader = Loader(self.silver_base_path, self.gold_base_path)
         self.search_adapter = SearchServiceAdapter(self.bronze_path)
-        self._exceptions = []  # Store exceptions from threads
+        self._exceptions = []
 
-    def extract(self, file: UploadFile, background_tasks: BackgroundTasks = None, batch_size: int = 1000, use_threads: bool = True) -> pd.DataFrame:
+    def extract(self, file: UploadFile, background_tasks: BackgroundTasks = None, batch_size: int = 10000, use_threads: bool = True) -> pd.DataFrame:
         """Extract data from file and process ETL and indexing in parallel if use_threads is True."""
         try:
-            # Extract and cleanse data
             df = self.extractor.extract(file, batch_size=batch_size)
             
             if use_threads:
-                # Event to signal extraction completion
                 extract_complete = threading.Event()
-                
-                # Threads for ETL and indexing
                 etl_thread = threading.Thread(target=self._run_full_etl_thread, args=(extract_complete,))
                 index_thread = threading.Thread(target=self._run_indexing_thread, args=(df, batch_size, extract_complete))
-                
-                # Start threads
                 etl_thread.start()
                 index_thread.start()
-                
-                # Signal extraction complete
                 extract_complete.set()
-                
-                # Wait for threads to finish and check for exceptions
                 etl_thread.join()
                 index_thread.join()
-                
                 if self._exceptions:
                     raise Exception("Errors occurred in threads: " + "; ".join(str(e) for e in self._exceptions))
             else:
-                # Sequential execution
-                for i in range(0, len(df), batch_size):
-                    batch = df.iloc[i:i + batch_size].to_dict('records')
-                    self.search_adapter.batch_create_documents(batch)
+                self.search_adapter.batch_create_documents(df.to_dict('records'), batch_size=batch_size)
                 if background_tasks:
                     background_tasks.add_task(self._run_full_etl)
                 else:
@@ -70,7 +56,7 @@ class ETLService:
     def _run_full_etl_thread(self, extract_complete: threading.Event):
         """Run the full ETL process in a thread."""
         try:
-            extract_complete.wait()  # Wait for extraction to complete
+            extract_complete.wait()
             logger.info("Starting full ETL process in thread")
             transformed_data = self.transform()
             self.load(transformed_data)
@@ -82,11 +68,9 @@ class ETLService:
     def _run_indexing_thread(self, df: pd.DataFrame, batch_size: int, extract_complete: threading.Event):
         """Run Typesense indexing in a thread."""
         try:
-            extract_complete.wait()  # Wait for extraction to complete
+            extract_complete.wait()
             logger.info("Starting Typesense indexing in thread")
-            for i in range(0, len(df), batch_size):
-                batch = df.iloc[i:i + batch_size].to_dict('records')
-                self.search_adapter.batch_create_documents(batch)
+            self.search_adapter.batch_create_documents(df.to_dict('records'), batch_size=batch_size)
             logger.info("Typesense indexing completed in thread")
         except Exception as e:
             self._exceptions.append(e)
@@ -122,7 +106,7 @@ class ETLService:
         else:
             raise ValueError(f"Unknown operation: {operation}. Must be 'create', 'update', or 'delete'.")
     
-    def run_etl_pipeline(self, file: UploadFile = None, batch_size: int = 1000, use_threads: bool = True) -> Dict[str, Dict[str, pd.DataFrame]]:
+    def run_etl_pipeline(self, file: UploadFile = None, batch_size: int = 10000, use_threads: bool = True) -> Dict[str, Dict[str, pd.DataFrame]]:
         """Run the complete ETL pipeline with optional threading."""
         try:
             if file:
@@ -143,24 +127,19 @@ class ETLService:
                     self._run_full_etl()
                     self.sync_search_index(batch_size=batch_size)
             
-            transformed_data = self.transform()  # Return the latest transformed data
+            transformed_data = self.transform()
             logger.info("ETL pipeline completed successfully")
             return transformed_data
         except Exception as e:
             logger.error(f"ETL pipeline failed: {str(e)}")
             raise
     
-    def sync_search_index(self, batch_size: int = 1000) -> None:
+    def sync_search_index(self, batch_size: int = 10000) -> None:
         """Synchronize the search index with the current bronze data in batches."""
         try:
             self.search_adapter.search_service.clear_index()
-            for chunk in pd.read_parquet(self.bronze_path, chunksize=batch_size):
-                df = pd.DataFrame(chunk)
-                if 'names' in df.columns and 'name' not in df.columns:
-                    df = df.rename(columns={'names': 'name'})
-                elif 'names' in df.columns:
-                    df = df.drop(columns=['names'])
-                self.search_adapter.batch_create_documents(df.to_dict('records'))
+            df = self.extractor.load_bronze_data()
+            self.search_adapter.batch_create_documents(df.to_dict('records'), batch_size=batch_size)
             logger.info(f"Search index synchronized with bronze data")
         except Exception as e:
             logger.error(f"Search index synchronization failed: {str(e)}")
