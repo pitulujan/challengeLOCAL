@@ -11,43 +11,39 @@ logger = logging.getLogger(__name__)
 
 class Extractor:
     def __init__(self, bronze_path: str):
-        """Initialize the Extractor with the path to store raw data.
-        
-        Args:
-            bronze_path: Path where extracted data will be stored
-        """
+        """Initialize the Extractor with the path to store raw data."""
         self.bronze_path = bronze_path
     
-    def extract(self, file: UploadFile, batch_size: int = 1000) -> pd.DataFrame:
-        """Extract data from uploaded file in batches and save to bronze layer.
+    def extract(self, file_path: str, batch_size: int = 1000) -> pd.DataFrame:
+        """Extract data from a file path in batches and save to bronze layer.
         
         Args:
-            file: FastAPI UploadFile containing CSV or JSON data
+            file_path: Path to the file (CSV or JSON)
             batch_size: Number of rows to process in each batch
             
         Returns:
             DataFrame containing the extracted and standardized data (full dataset)
         """
         try:
-            file_type = file.filename.split(".")[-1].lower()
+            file_type = file_path.split(".")[-1].lower()
             full_df = pd.DataFrame()  # To store the entire dataset for return
             
             if file_type == "csv":
                 # Process CSV in chunks
-                for chunk in pd.read_csv(file.file, chunksize=batch_size):
+                for chunk in pd.read_csv(file_path, chunksize=batch_size):
                     df_chunk = self._process_chunk(chunk)
                     full_df = pd.concat([full_df, df_chunk], ignore_index=True)
                     self._save_to_bronze(df_chunk)
             elif file_type == "json":
                 # JSON files are typically smaller; process as a whole
-                df = pd.read_json(file.file)
+                df = pd.read_json(file_path)
                 df = self._process_chunk(df)
                 full_df = df
                 self._save_to_bronze(df)
             else:
                 raise ValueError("Unsupported file type. Use 'csv' or 'json'.")
             
-            logger.info(f"Extracted and saved {len(full_df)} records from {file.filename}")
+            logger.info(f"Extracted and saved {len(full_df)} records from {file_path}")
             return full_df
             
         except Exception as e:

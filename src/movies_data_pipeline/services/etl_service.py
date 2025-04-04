@@ -23,10 +23,10 @@ class ETLService:
         self.search_adapter = SearchServiceAdapter(self.bronze_path)
         self._exceptions = []
 
-    def extract(self, file: UploadFile, background_tasks: BackgroundTasks = None, batch_size: int = 10000, use_threads: bool = True) -> pd.DataFrame:
-        """Extract data from file and process ETL and indexing in parallel if use_threads is True."""
+    def extract(self, file_path: str, background_tasks: BackgroundTasks = None, batch_size: int = 10000, use_threads: bool = True) -> pd.DataFrame:
+        """Extract data from file path and process ETL and indexing in parallel if use_threads is True."""
         try:
-            df = self.extractor.extract(file, batch_size=batch_size)
+            df = self.extractor.extract(file_path, batch_size=batch_size)
             
             if use_threads:
                 extract_complete = threading.Event()
