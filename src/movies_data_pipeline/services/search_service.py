@@ -38,7 +38,7 @@ class SearchService:
                 budget=doc.get('budget', 0.0),
                 revenue=doc.get('revenue', 0.0),
                 score=doc['score'],
-                is_deleted=doc.get('is_deleted', False)  # Reflect is_deleted status
+                is_deleted=doc.get('is_deleted', False)  
             )
             movies.append(movie)
         return movies

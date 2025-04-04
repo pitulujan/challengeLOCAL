@@ -4,6 +4,10 @@ from typing import Dict, Any
 from fastapi import UploadFile, BackgroundTasks
 from datetime import datetime
 import uuid
+from .extractor_service import Extractor
+from .transformer_service import Transformer
+from .loader_service import Loader
+from .search_service_adapter import SearchServiceAdapter
 from movies_data_pipeline.services.search_service import SearchService
 from movies_data_pipeline.data_access.database import get_session_direct
 import logging
@@ -12,10 +16,17 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 class ETLService:
-    def __init__(self):
-        self.bronze_path = "src/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet"
-        self.silver_base_path = "src/movies_data_pipeline/data_access/data_lake/silver/"
-        self.gold_base_path = "src/movies_data_pipeline/data_access/data_lake/gold/"
+    def __init__(self, bronze_path: str = None, silver_base_path: str = None, gold_base_path: str = None):
+        """Initialize the ETL Service with paths and component classes."""
+        self.bronze_path = bronze_path or "src/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet"
+        self.silver_base_path = silver_base_path or "src/movies_data_pipeline/data_access/data_lake/silver/"
+        self.gold_base_path = gold_base_path or "src/movies_data_pipeline/data_access/data_lake/gold/"
+        
+        # Initialize components
+        self.extractor = Extractor(self.bronze_path)
+        self.transformer = Transformer(self.bronze_path)
+        self.loader = Loader(self.silver_base_path, self.gold_base_path)
+        self.search_adapter = SearchServiceAdapter(self.bronze_path)
         self.search_service = SearchService()
 
     def extract(self, file: UploadFile, background_tasks: BackgroundTasks = None) -> pd.DataFrame:
