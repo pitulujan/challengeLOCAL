@@ -27,24 +27,31 @@ class ETLService:
         else:
             raise ValueError("Unsupported file type. Use 'csv', 'json', or 'pdf'.")
         
+        # Normalize 'names' to 'name' at ingestion
+        if 'names' in df.columns and 'name' not in df.columns:
+            df = df.rename(columns={'names': 'name'})
+        elif 'names' in df.columns:
+            df = df.drop(columns=['names'])
+        
         current_time = datetime.now()
         df['created_at'] = current_time
         df['updated_at'] = current_time
         
-        # Generate UUID based on all raw columns
         def generate_uuid(row):
-            # Convert row to string, excluding created_at and updated_at to keep it based on raw data
-            raw_data = row.drop(['created_at', 'updated_at'], errors='ignore').astype(str).to_dict()
-            # Create a string representation of the raw data
+            raw_data = row.drop(['created_at', 'updated_at', 'uuid'], errors='ignore').astype(str).to_dict()
             data_str = ''.join(f"{k}:{v}" for k, v in sorted(raw_data.items()))
-            # Use UUID5 with a namespace (e.g., UUID for your app) for deterministic UUIDs
-            namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # Example namespace UUID
+            namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
             return str(uuid.uuid5(namespace, data_str))
         
-        df['uuid'] = df.apply(generate_uuid, axis=1)
+        if 'uuid' not in df.columns:
+            df['uuid'] = df.apply(generate_uuid, axis=1)
         
         if os.path.exists(self.bronze_path):
             existing_df = pd.read_parquet(self.bronze_path)
+            if 'names' in existing_df.columns and 'name' not in existing_df.columns:
+                existing_df = existing_df.rename(columns={'names': 'name'})
+            elif 'names' in existing_df.columns:
+                existing_df = existing_df.drop(columns=['names'])
             if 'created_at' not in existing_df.columns:
                 existing_df['created_at'] = pd.NaT
             if 'updated_at' not in existing_df.columns:
@@ -52,23 +59,19 @@ class ETLService:
             if 'uuid' not in existing_df.columns:
                 existing_df['uuid'] = existing_df.apply(generate_uuid, axis=1)
             df = pd.concat([existing_df, df], ignore_index=True)
-            # Remove duplicates based on UUID to avoid redundant entries
             df = df.drop_duplicates(subset=['uuid'], keep='last')
         
         df.to_parquet(self.bronze_path, index=False)
         
-        # Update Typesense for each new movie with UUID
         for _, row in df.iterrows():
             self.update_typesense("create", row.to_dict())
         
-        # Schedule full ETL in the background if background_tasks is provided
         if background_tasks:
             background_tasks.add_task(self._run_full_etl)
         
         return df
 
     def _run_full_etl(self):
-        """Helper method to run the full transform and load process."""
         try:
             transformed_data = self.transform()
             self.load(transformed_data)
@@ -77,14 +80,17 @@ class ETLService:
             logger.error(f"Full ETL process failed: {str(e)}")
 
     def transform(self) -> Dict[str, Dict[str, pd.DataFrame]]:
-        # [Unchanged transform method for brevity, but you can propagate 'uuid' to silver/gold if needed]
         raw_df = pd.read_parquet(self.bronze_path)
         logger.debug("Sample raw date_x: %s", raw_df["date_x"].head(5).tolist())
 
-        if "names" in raw_df.columns and "name" not in raw_df.columns:
-            raw_df = raw_df.rename(columns={"names": "name"})
-        elif "name" not in raw_df.columns:
-            raise KeyError("Input data must contain a 'name' or 'names' column for movie titles.")
+        # Normalize 'names' to 'name'
+        if 'names' in raw_df.columns and 'name' not in raw_df.columns:
+            raw_df = raw_df.rename(columns={'names': 'name'})
+        elif 'names' in raw_df.columns:
+            raw_df = raw_df.drop(columns=['names'])
+        
+        if 'name' not in raw_df.columns:
+            raise KeyError("Input data must contain a 'name' column for movie titles.")
 
         possible_date_cols = ["date_x", "release_date", "date"]
         date_col = next((col for col in possible_date_cols if col in raw_df.columns), None)
@@ -203,7 +209,6 @@ class ETLService:
         }
 
     def load(self, transformed_data: Dict[str, Dict[str, pd.DataFrame]]) -> None:
-        # [Unchanged load method]
         for table_name, df in transformed_data["silver"].items():
             df.to_parquet(f"{self.silver_base_path}{table_name}.parquet", index=False)
 
@@ -217,15 +222,38 @@ class ETLService:
         if operation == "delete":
             if not movie_name:
                 raise ValueError("movie_name is required for delete operation")
-            # For delete, we need the UUID, so assume it's provided or fetch it
-            # For simplicity, we'll mark as deleted with movie_name here
-            self.search_service.index_movie({"name": movie_name, "is_deleted": True})
-            logger.info(f"Marked movie '{movie_name}' as deleted in Typesense")
+            df = pd.read_parquet(self.bronze_path)
+            if 'names' in df.columns and 'name' not in df.columns:
+                df = df.rename(columns={'names': 'name'})
+            elif 'names' in df.columns:
+                df = df.drop(columns=['names'])
+            movie_row = df[df["name"] == movie_name]
+            if movie_row.empty:
+                logger.warning(f"Movie '{movie_name}' not found in bronze layer for deletion")
+                return
+            uuid_to_delete = movie_row.iloc[0]["uuid"]
+            self.search_service.delete_movie(uuid_to_delete)
+            logger.info(f"Deleted movie '{movie_name}' with UUID '{uuid_to_delete}' from Typesense")
             return
 
         raw_df = pd.DataFrame([movie_data])
         if "names" in raw_df.columns and "name" not in raw_df.columns:
             raw_df = raw_df.rename(columns={"names": "name"})
+        elif "names" in raw_df.columns:
+            raw_df = raw_df.drop(columns=["names"])
+        
+        if "uuid" not in raw_df.columns and movie_name:
+            df = pd.read_parquet(self.bronze_path)
+            if 'names' in df.columns and 'name' not in df.columns:
+                df = df.rename(columns={'names': 'name'})
+            elif 'names' in df.columns:
+                df = df.drop(columns=['names'])
+            movie_row = df[df["name"] == movie_name]
+            if not movie_row.empty:
+                raw_df["uuid"] = movie_row.iloc[0]["uuid"]
+            else:
+                logger.warning(f"Movie '{movie_name}' not found; generating new UUID")
+                raw_df["uuid"] = str(uuid.uuid4())
         
         possible_date_cols = ["date_x", "release_date", "date"]
         date_col = next((col for col in possible_date_cols if col in raw_df.columns), None)
@@ -251,7 +279,7 @@ class ETLService:
         row = raw_df.iloc[0]
         release_date = row["date_x"].strftime("%Y-%m-%d") if pd.notna(row["date_x"]) else "Unknown"
         movie_dict = {
-            "id": row.get("uuid"),  # Use UUID as the document ID in Typesense
+            "id": row["uuid"],
             "name": row["name"],
             "orig_title": row.get("orig_title", row["name"]),
             "overview": row.get("overview", ""),
@@ -267,4 +295,4 @@ class ETLService:
             "is_deleted": False
         }
         self.search_service.index_movie(movie_dict)
-        logger.info(f"Updated Typesense with {operation} for movie '{row['name']}' with UUID '{row.get('uuid')}'")
+        logger.info(f"Updated Typesense with {operation} for movie '{row['name']}' with UUID '{row['uuid']}'")

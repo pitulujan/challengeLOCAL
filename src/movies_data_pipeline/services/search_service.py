@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any
 from datetime import datetime
 from movies_data_pipeline.data_access.vector_db import VectorDB
 from movies_data_pipeline.domain.models.movie import Movie
@@ -20,30 +20,35 @@ class SearchService:
         for hit in hits:
             doc = hit['document']
             release_date_str = doc['release_date']
-            # Handle 'Unknown' or invalid date strings
             try:
                 release_date = datetime.strptime(release_date_str, "%Y-%m-%d").date() if release_date_str != "Unknown" else None
             except ValueError:
-                release_date = None  # Set to None if parsing fails for any reason
+                release_date = None
 
             movie = Movie(
                 name=doc['name'],
-                orig_title=doc.get('orig_title', doc['name']),  # Fallback to name if orig_title not provided
+                orig_title=doc.get('orig_title', doc['name']),
                 overview=doc['overview'],
-                status=doc.get('status', 'Unknown'),  # Fallback if status not provided
+                status=doc.get('status', 'Unknown'),
                 release_date=release_date,
                 genres=doc['genres'],
-                crew=doc.get('crew', []),  # Fallback to empty list if crew not provided
+                crew=doc.get('crew', []),
                 country=doc['country'],
                 language=doc['language'],
-                budget=doc.get('budget', 0.0),  # Fallback if budget not provided
-                revenue=doc.get('revenue', 0.0),  # Fallback if revenue not provided
+                budget=doc.get('budget', 0.0),
+                revenue=doc.get('revenue', 0.0),
                 score=doc['score'],
-                is_deleted=False  # Typesense only indexes non-deleted movies
+                is_deleted=doc.get('is_deleted', False)  # Reflect is_deleted status
             )
             movies.append(movie)
         return movies
 
-    def index_movie(self, movie: dict):
-        """Index a movie in Typesense."""
+    def index_movie(self, movie: Dict[str, Any]):
+        """Index or update a movie in Typesense using its UUID as the id."""
+        if "id" not in movie or not movie["id"]:
+            raise ValueError("Movie data must include a valid 'id' (UUID)")
         self.vector_db.index_movie(movie)
+
+    def delete_movie(self, movie_id: str):
+        """Delete a movie from Typesense by its UUID."""
+        self.vector_db.delete_movie(movie_id)
