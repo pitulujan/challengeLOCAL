@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from typing import Dict, Any, List, Tuple
 from movies_data_pipeline.services.bronze_data_service import BronzeDataService
+import logging
 
 class CrudController:
     def __init__(self):
@@ -12,6 +13,7 @@ class CrudController:
         @self.router.post("/")
         async def create_raw(data: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, str]:
             """Create a new record in the Bronze layer."""
+            logging.debug(f"Received raw input: {data}")
             return await self.bronze_service.create(data, background_tasks)
 
         @self.router.get("/{identifier}")

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI,Request
 from movies_data_pipeline.api.routes import seed, crud, gold, search
 from movies_data_pipeline.data_access.vector_db import VectorDB
 from movies_data_pipeline.data_access.database import init_db
