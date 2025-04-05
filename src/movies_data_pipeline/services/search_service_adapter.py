@@ -114,19 +114,20 @@ class SearchServiceAdapter:
         """Update Typesense index with movie data."""
         if operation == "delete":
             if not movie_name:
-                raise ValueError("movie_name is required for delete operation")
-            df = pd.read_parquet(self.bronze_path)
-            if 'names' in df.columns and 'name' not in df.columns:
-                df = df.rename(columns={'names': 'name'})
-            elif 'names' in df.columns:
-                df = df.drop(columns=['names'])
-            movie_row = df[df["name"] == movie_name]
-            if movie_row.empty:
-                logger.warning(f"Movie '{movie_name}' not found in bronze layer for deletion")
-                return
-            uuid_to_delete = movie_row.iloc[0]["uuid"]
-            self.search_service.delete_movie(uuid_to_delete)
+                raise ValueError("movie_name (UUID) is required for delete operation")
+            # Assume movie_name is the UUID for deletion
+            try:
+                self.search_service.delete_movie(movie_name)
+                logger.info(f"Deleted movie with UUID '{movie_name}' from Typesense")
+            except Exception as e:
+                logger.error(f"Failed to delete movie with UUID '{movie_name}' from Typesense: {str(e)}")
+                raise
             return
+        
+        # Use bulk preparation for create/update consistency
+        movie_dict = self._prepare_movies_bulk([movie_data])[0]
+        self.search_service.index_movie(movie_dict)
+        logger.info(f"Updated Typesense with {operation} for movie '{movie_dict['name']}' with UUID '{movie_dict['id']}'")
         
         # Use bulk preparation for consistency
         movie_dict = self._prepare_movies_bulk([movie_data])[0]

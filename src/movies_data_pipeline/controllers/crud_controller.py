@@ -59,7 +59,12 @@ class CrudController:
                 "updated_records": result["updated_records"]
             }
 
-        @self.router.delete("/{movie_name}")
-        async def delete_raw(movie_name: str, background_tasks: BackgroundTasks) -> Dict[str, str]:
-            """Delete a record from the Bronze layer by movie_name."""
-            return await self.bronze_service.delete(movie_name, background_tasks)
+        @self.router.delete("/")
+        async def delete_raw(uuids: str | List[str], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+            """Delete one or multiple records from the Bronze layer by UUID."""
+            result = await self.bronze_service.delete(uuids, background_tasks)
+            return {
+                "message": result["message"],
+                "deleted_count": result["deleted_count"],
+                "not_found": result["not_found"]
+            }

@@ -5,9 +5,9 @@ services:
     image: postgres:15
     container_name: postgres_db
     environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=gold
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
@@ -15,10 +15,27 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d gold"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: pgadmin
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+  #     PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+  #     PGADMIN_LISTEN_PORT: ${PGADMIN_LISTEN_PORT}
+  #   ports:
+  #     - "8080:80"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   volumes:
+  #     - pgadmin_data:/var/lib/pgadmin
+  #   networks:
+  #     - app_network
 
   api:
     build:
@@ -29,23 +46,23 @@ services:
       - "8000:8000"
     volumes:
       - ./src/movies_data_pipeline:/app/movies_data_pipeline
-      - ./src/movies_data_pipeline/data_access/data_lake:/app/movies_data_pipeline/data_access/data_lake
+    #  - ./src/movies_data_pipeline/data_access/data_lake:/app/movies_data_pipeline/data_access/data_lake # removing the bind so data does not persist on my local 
     depends_on:
       postgres:
         condition: service_healthy
       typesense:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://admin:password@postgres:5432/gold
-      - TYPESENSE_HOST=typesense
-      - TYPESENSE_PORT=8108
-      - TYPESENSE_API_KEY=xyz
-      - DATA_LAKE_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake
-      - BRONZE_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/bronze
-      - BRONZE_MOVIES_PATH=/app/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet
-      - SILVER_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/silver
-      - GOLD_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/gold
-      - BATCH_SIZE=10000
+      - DATABASE_URL=${DATABASE_URL}
+      - TYPESENSE_HOST=${TYPESENSE_HOST}
+      - TYPESENSE_PORT=${TYPESENSE_PORT}
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY}
+      - DATA_LAKE_BASE_PATH=${DATA_LAKE_BASE_PATH}
+      - BRONZE_BASE_PATH=${BRONZE_BASE_PATH}
+      - BRONZE_MOVIES_PATH=${BRONZE_MOVIES_PATH}
+      - SILVER_BASE_PATH=${SILVER_BASE_PATH}
+      - GOLD_BASE_PATH=${GOLD_BASE_PATH}
+      - BATCH_SIZE=${BATCH_SIZE}
     networks:
       - app_network
     command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
@@ -60,13 +77,13 @@ services:
     volumes:
       - typesense_data:/data
     environment:
-      - TYPESENSE_API_KEY=xyz
-      - TYPESENSE_DATA_DIR=/data
-      - TYPESENSE_ENABLE_CORS=true
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY}
+      - TYPESENSE_DATA_DIR=${TYPESENSE_DATA_DIR}
+      - TYPESENSE_ENABLE_CORS=${TYPESENSE_ENABLE_CORS}
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "-H", "X-TYPESENSE-API-KEY: xyz", "http://localhost:8108/health"]
+      test: ["CMD", "curl", "-f", "-H", "X-TYPESENSE-API-KEY: ${TYPESENSE_API_KEY}", "http://localhost:8108/health"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -75,6 +92,7 @@ services:
 volumes:
   postgres_data:
   typesense_data:
+#  pgadmin_data:
 
 networks:
   app_network:

@@ -211,16 +211,56 @@ class BronzeDataService:
             "is_deleted": False
         }
 
-    async def delete(self, movie_name: str, background_tasks: BackgroundTasks) -> Dict[str, str]:
-        """Delete entries by name."""
+    async def delete(self, uuids: str | List[str], background_tasks: BackgroundTasks) -> Dict[str, Any]:
+        """Delete one or more entries by UUID."""
         df = self.etl_service.extractor.load_bronze_data(read_only=True)
-        if 'name' not in df.columns:
-            raise HTTPException(status_code=500, detail="No 'name' column in data")
-        if not (df["name"] == movie_name).any():
-            raise HTTPException(status_code=404, detail="Movie not found")
+        if 'uuid' not in df.columns:
+            raise HTTPException(status_code=500, detail="No 'uuid' column in data")
 
-        df = df[df["name"] != movie_name]
-        df.to_parquet(self.bronze_movies_path, index=False)
-        self.etl_service.update_typesense("delete", {}, movie_name)
-        background_tasks.add_task(self._run_etl)
-        return {"message": "Data deleted, ETL scheduled"}
+        # Normalize input to a list of UUIDs
+        if isinstance(uuids, str):
+            try:
+                uuid.UUID(uuids)  # Validate UUID format
+                uuid_list = [uuids]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Input must be a valid UUID")
+        elif isinstance(uuids, list):
+            uuid_list = uuids
+            for u in uuid_list:
+                if not isinstance(u, str):
+                    raise HTTPException(status_code=400, detail="All items in list must be strings")
+                try:
+                    uuid.UUID(u)  # Validate each UUID
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid UUID: {u}")
+        else:
+            raise HTTPException(status_code=400, detail="Input must be a string or list of strings")
+
+        deleted_count = 0
+        not_found = []
+
+        # Process each UUID to delete
+        for movie_uuid in uuid_list:
+            if not (df["uuid"] == movie_uuid).any():
+                logger.debug(f"Movie with UUID '{movie_uuid}' not found in bronze layer")
+                not_found.append(movie_uuid)
+                continue
+            
+            # Delete the record from DataFrame and Typesense using UUID
+            df = df[df["uuid"] != movie_uuid]
+            self.etl_service.update_typesense("delete", {}, movie_uuid)
+            deleted_count += 1
+
+        # If any records were deleted, save changes and schedule ETL
+        if deleted_count > 0:
+            df.to_parquet(self.bronze_movies_path, index=False)
+            background_tasks.add_task(self._run_etl)
+            message = f"{deleted_count} record(s) deleted, {len(not_found)} not found. ETL process scheduled in background."
+        else:
+            message = f"No records deleted, {len(not_found)} not found."
+
+        return {
+            "message": message,
+            "deleted_count": deleted_count,
+            "not_found": not_found
+        }
