@@ -2,7 +2,7 @@ from fastapi import FastAPI,Request
 from movies_data_pipeline.api.routes import seed, crud, gold, search
 from movies_data_pipeline.data_access.vector_db import VectorDB
 from movies_data_pipeline.data_access.database import init_db
-from movies_data_pipeline.services.initialize_service import initialize_schemas
+from movies_data_pipeline.services.initialize_service import InitializeService
 import logging
 
 # Configure logging to show only INFO and above
@@ -34,7 +34,8 @@ app.include_router(search.router)
 @app.on_event("startup")
 def startup_event():
     init_db()
-    initialize_schemas()
+    initialize_service = InitializeService()
+    initialize_service.initialize_schemas()
     vector_db = VectorDB()
     vector_db._initialize_collection()
     

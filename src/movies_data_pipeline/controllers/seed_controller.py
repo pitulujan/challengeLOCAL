@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 import os
+from pathlib import Path
 import shutil
 import logging
 from movies_data_pipeline.services.etl_service import ETLService
@@ -10,7 +11,7 @@ class SeedController:
     def __init__(self):
         self.router = APIRouter()
         self.etl_service = ETLService()
-        self.bronze_dir = "src/movies_data_pipeline/data_access/data_lake/bronze/"
+        self.bronze_dir = Path(os.getenv("BRONZE_BASE_PATH"))
         self._register_routes()
 
     def _register_routes(self):

@@ -1,7 +1,7 @@
 import pandas as pd
 from typing import Dict, Any
 import logging
-from sqlalchemy.exc import SQLAlchemyError, DatabaseError
+from sqlalchemy.exc import SQLAlchemyError
 from movies_data_pipeline.data_access.database import get_session_direct
 
 logger = logging.getLogger(__name__)

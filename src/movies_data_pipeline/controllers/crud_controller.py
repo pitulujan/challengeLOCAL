@@ -2,31 +2,33 @@ from fastapi import APIRouter, BackgroundTasks, Query
 from typing import Dict, Any, List
 from movies_data_pipeline.services.bronze_data_service import BronzeDataService
 import logging
+import os
+from pathlib import Path
 
 class CrudController:
     def __init__(self):
         self.router = APIRouter()
-        self.bronze_service = BronzeDataService("src/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet")
+        self.bronze_service = BronzeDataService(os.getenv("BRONZE_MOVIES_PATH"))
         self._register_routes()
 
     def _register_routes(self):
-        @self.router.post("/v1")
+        @self.router.post("/")
         async def create_raw(data: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, str]:
             """Create a new record in the Bronze layer."""
             logging.debug(f"Received raw input: {data}")
             return await self.bronze_service.create(data, background_tasks)
 
-        @self.router.get("/v1/{identifier}")
+        @self.router.get("/{identifier}")
         async def read_raw_v1(identifier: str) -> List[Dict[str, Any]]:
             """Read a record from the Bronze layer by UUID or movie name (v1)."""
             return await self.bronze_service.read(identifier)
 
-        @self.router.get("/v2")
+        @self.router.get("/get_full_raw/")
         async def read_all_raw_v2(
             page: int = Query(1, ge=1, description="Page number, starting from 1"),
             page_size: int = Query(10, ge=1, le=100, description="Number of records per page, max 100")
         ) -> Dict[str, Any]:
-            """Read all records from the Bronze layer with pagination (v2)."""
+            """Read all records from the Bronze layer with pagination ."""
             df, total_records = self.bronze_service.etl_service.extractor.load_paginated_bronze_data(
                 page=page, page_size=page_size, read_only=True
             )
@@ -48,7 +50,7 @@ class CrudController:
                 "total_pages": total_pages
             }
 
-        @self.router.put("/v1")
+        @self.router.put("/")
         async def update_raw(updates: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, Any]:
             """Update one or multiple records in the Bronze layer by UUID or movie name."""
             result = await self.bronze_service.update(updates, background_tasks)
@@ -57,7 +59,7 @@ class CrudController:
                 "updated_records": result["updated_records"]
             }
 
-        @self.router.delete("/v1/{movie_name}")
+        @self.router.delete("/{movie_name}")
         async def delete_raw(movie_name: str, background_tasks: BackgroundTasks) -> Dict[str, str]:
             """Delete a record from the Bronze layer by movie_name."""
             return await self.bronze_service.delete(movie_name, background_tasks)

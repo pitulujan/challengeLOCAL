@@ -8,19 +8,22 @@ from .loader_service import Loader
 from .search_service_adapter import SearchServiceAdapter
 from movies_data_pipeline.data_access.vector_db import VectorDB
 import json
+import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 class ETLService:
     def __init__(self):
-        self.bronze_path = "src/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet"
-        self.silver_base_path = "src/movies_data_pipeline/data_access/data_lake/silver/"
-        self.gold_base_path = "src/movies_data_pipeline/data_access/data_lake/gold/"
+        self.bronze_movies_path = Path(os.getenv("BRONZE_MOVIES_PATH"))
+        self.bronze_base_path = Path(os.getenv("BRONZE_BASE_PATH"))
+        self.silver_base_path = Path(os.getenv("SILVER_BASE_PATH"))
+        self.gold_base_path = Path(os.getenv("GOLD_BASE_PATH"))
         
-        self.extractor = Extractor(self.bronze_path)
-        self.transformer = Transformer(self.bronze_path)
+        self.extractor = Extractor(self.bronze_movies_path)
+        self.transformer = Transformer(self.bronze_movies_path)
         self.loader = Loader(self.silver_base_path, self.gold_base_path)
-        self.search_adapter = SearchServiceAdapter(self.bronze_path)
+        self.search_adapter = SearchServiceAdapter(self.bronze_movies_path)
         self.vector_db = VectorDB(initialize=False)
         self._exceptions = []
 
@@ -81,8 +84,8 @@ class ETLService:
         try:
             logger.info("Starting full ETL pipeline")
             if file:
-                bronze_dir = '/'.join(self.bronze_path.split('/')[:-1])
-                file_path = f"{bronze_dir}/{file.filename}"
+                
+                file_path = f"{self.bronze_base_path}/{file.filename}"
                 df, new_records_count = self.extract(file_path, batch_size=batch_size)
                 if new_records_count > 0:
                     transformed_data = self.transform()

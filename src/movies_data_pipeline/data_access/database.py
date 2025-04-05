@@ -6,7 +6,6 @@ import logging
 from movies_data_pipeline.data_access.models.gold_tables import revenue_by_genre, avg_score_by_year
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-print(f"DEBUG: DATABASE_URL={DATABASE_URL}")
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable not set")

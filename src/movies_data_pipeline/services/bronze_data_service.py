@@ -9,8 +9,8 @@ from .etl_service import ETLService
 logger = logging.getLogger(__name__)
 
 class BronzeDataService:
-    def __init__(self, bronze_path: str):
-        self.bronze_path = bronze_path
+    def __init__(self, bronze_movies_path: str):
+        self.bronze_movies_path = bronze_movies_path
         self.etl_service = ETLService()
 
     def _run_etl(self):
@@ -153,7 +153,7 @@ class BronzeDataService:
                 updated_records.append((updated_record.get("name"), updated_record.get("uuid")))
 
         if updated_records:
-            df.to_parquet(self.bronze_path, index=False)
+            df.to_parquet(self.bronze_movies_path, index=False)
             try:
                 self.etl_service.batch_update_typesense(typesense_updates)
                 logger.info(f"Successfully sent {len(typesense_updates)} updates to Typesense")
@@ -220,7 +220,7 @@ class BronzeDataService:
             raise HTTPException(status_code=404, detail="Movie not found")
 
         df = df[df["name"] != movie_name]
-        df.to_parquet(self.bronze_path, index=False)
+        df.to_parquet(self.bronze_movies_path, index=False)
         self.etl_service.update_typesense("delete", {}, movie_name)
         background_tasks.add_task(self._run_etl)
         return {"message": "Data deleted, ETL scheduled"}

@@ -5,9 +5,9 @@ services:
     image: postgres:15
     container_name: postgres_db
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: gold
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=gold
     ports:
       - "5432:5432"
     volumes:
@@ -19,23 +19,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # pgadmin:
-  #   image: dpage/pgadmin4:latest
-  #   container_name: pgadmin
-  #   environment:
-  #     PGADMIN_DEFAULT_EMAIL: admin@admin.com
-  #     PGADMIN_DEFAULT_PASSWORD: admin
-  #     PGADMIN_LISTEN_PORT: 80
-  #   ports:
-  #     - "8080:80"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   volumes:
-  #     - pgadmin_data:/var/lib/pgadmin
-  #   networks:
-  #     - app_network
 
   api:
     build:
@@ -57,9 +40,15 @@ services:
       - TYPESENSE_HOST=typesense
       - TYPESENSE_PORT=8108
       - TYPESENSE_API_KEY=xyz
+      - DATA_LAKE_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake
+      - BRONZE_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/bronze
+      - BRONZE_MOVIES_PATH=/app/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet
+      - SILVER_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/silver
+      - GOLD_BASE_PATH=/app/movies_data_pipeline/data_access/data_lake/gold
+      - BATCH_SIZE=10000
     networks:
       - app_network
-    command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info  
+    command: uvicorn movies_data_pipeline.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
 
   typesense:
     build:
@@ -86,7 +75,6 @@ services:
 volumes:
   postgres_data:
   typesense_data:
-  # pgadmin_data:
 
 networks:
   app_network:
