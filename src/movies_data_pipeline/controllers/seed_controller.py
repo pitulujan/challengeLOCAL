@@ -18,12 +18,13 @@ class SeedController:
         async def seed_data(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
             file_type = file.filename.split(".")[-1].lower()
             if file_type not in ["csv", "json", "pdf"]:
-                raise HTTPException(status_code=400, detail="Unsupported file type. Use 'csv', 'json', or 'pdf'.")
+                raise HTTPException(status_code=400, detail="Unsupported file type. Use 'csv' or 'json'")
             
             os.makedirs(self.bronze_dir, exist_ok=True)
             file_path = os.path.join(self.bronze_dir, file.filename)
             
             try:
+                # Save the uploaded file to disk
                 with open(file_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
                 logger.debug(f"File saved to {file_path}")
@@ -36,12 +37,17 @@ class SeedController:
                 raise HTTPException(status_code=500, detail=f"Failed to initiate seeding: {str(e)}")
 
     def run_etl_in_background(self, file_path: str):
-        """Run the full ETL process in the background."""
+        """Run the ETL process in the background, respecting new_records_count."""
         try:
-            logger.info(f"Starting background ETL for {file_path}")
-            self.etl_service.extract(file_path)  # Extract and index
-            self.etl_service._run_full_etl()     # Transform and load
-            logger.info(f"Background ETL completed for {file_path}")
+            logger.info(f"Starting background ETL for {os.path.basename(file_path)}")
+            # Create a mock UploadFile object for run_etl_pipeline
+            with open(file_path, "rb") as f:
+                file = UploadFile(filename=os.path.basename(file_path), file=f)
+                result = self.etl_service.run_etl_pipeline(file=file)
+            if not result:  # Empty dict means no new records, transform/load skipped
+                logger.info(f"Background ETL skipped for {os.path.basename(file_path)} (no new records)")
+            else:
+                logger.info(f"Background ETL completed for {os.path.basename(file_path)}")
         except Exception as e:
-            logger.error(f"Background ETL failed for {file_path}: {str(e)}")
+            logger.error(f"Background ETL failed for {os.path.basename(file_path)}: {str(e)}")
             raise

@@ -4,9 +4,15 @@ from movies_data_pipeline.data_access.vector_db import VectorDB
 from movies_data_pipeline.data_access.database import init_db
 from movies_data_pipeline.services.initialize_service import initialize_schemas
 import logging
-logging.getLogger("python_multipart").setLevel(logging.INFO)
+
+# Configure logging to show only INFO and above
 logging.basicConfig(level=logging.INFO)
-logging.getLogger().setLevel(logging.INFO)  
+logger = logging.getLogger()  # Root logger
+logger.setLevel(logging.INFO)
+
+# Explicitly set SQLAlchemy logger to INFO
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)  # Suppress DEBUG from SQLAlchemy
+logging.getLogger("python_multipart").setLevel(logging.INFO)
 
 app = FastAPI()
 

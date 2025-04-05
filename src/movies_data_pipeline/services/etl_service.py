@@ -1,6 +1,6 @@
 import pandas as pd
 from typing import Dict, Any, List
-from fastapi import UploadFile,HTTPException
+from fastapi import UploadFile, HTTPException
 import logging
 from .extractor_service import Extractor
 from .transformer_service import Transformer
@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 class ETLService:
     def __init__(self):
-        """Initialize the ETL Service with paths and component classes."""
         self.bronze_path = "src/movies_data_pipeline/data_access/data_lake/bronze/movies.parquet"
         self.silver_base_path = "src/movies_data_pipeline/data_access/data_lake/silver/"
         self.gold_base_path = "src/movies_data_pipeline/data_access/data_lake/gold/"
@@ -25,15 +24,18 @@ class ETLService:
         self.vector_db = VectorDB(initialize=False)
         self._exceptions = []
 
-    def extract(self, file_path: str, batch_size: int = 10000) -> pd.DataFrame:
-        """Extract data from file path and index to Typesense."""
+    def extract(self, file_path: str, batch_size: int = 10000) -> tuple[pd.DataFrame, int]:
+        """Extract data from file path and index to Typesense only if new records are added."""
         try:
             logger.info(f"Starting extract phase for {file_path}")
-            df = self.extractor.extract(file_path, batch_size=batch_size)
-            logger.info("Indexing data to Typesense")
-            self.search_adapter.batch_create_documents(df.to_dict('records'), batch_size=batch_size)
-            logger.info(f"Extract phase completed for {file_path}")
-            return df
+            df, new_records_count = self.extractor.extract(file_path, batch_size=batch_size)
+            if new_records_count > 0 and not df.empty:
+                logger.info("Indexing data to Typesense")
+                self.search_adapter.batch_create_documents(df.to_dict('records'), batch_size=batch_size)
+                logger.info(f"Extract phase completed for {file_path}, {new_records_count} new records")
+            else:
+                logger.debug("No new or updated records to index, skipping Typesense")
+            return df, new_records_count
         except Exception as e:
             logger.error(f"ETL extract phase failed: {str(e)}")
             raise
@@ -75,22 +77,27 @@ class ETLService:
             raise ValueError(f"Unknown operation: {operation}. Must be 'create', 'update', or 'delete'.")
     
     def run_etl_pipeline(self, file: UploadFile = None, batch_size: int = 10000) -> Dict[str, Dict[str, pd.DataFrame]]:
-        """Run the complete ETL pipeline."""
+        """Run the complete ETL pipeline, only running transform/load for new data."""
         try:
             logger.info("Starting full ETL pipeline")
             if file:
                 bronze_dir = '/'.join(self.bronze_path.split('/')[:-1])
-                file_path = f"{bronze_dir}{file.filename}"  
-                self.extract(file_path, batch_size=batch_size)
-                transformed_data = self.transform()
-                self.load(transformed_data)
+                file_path = f"{bronze_dir}/{file.filename}"
+                df, new_records_count = self.extract(file_path, batch_size=batch_size)
+                if new_records_count > 0:
+                    transformed_data = self.transform()
+                    self.load(transformed_data)
+                    logger.info(f"ETL pipeline completed with {new_records_count} new records")
+                    return transformed_data
+                else:
+                    logger.debug("No new records added, skipping transform and load")
+                    return {}
             else:
                 self._run_full_etl()
                 self.sync_search_index(batch_size=batch_size)
                 transformed_data = self.transform()
-            
-            logger.info("ETL pipeline completed successfully")
-            return transformed_data
+                logger.info("ETL pipeline completed successfully (no file provided)")
+                return transformed_data
         except Exception as e:
             logger.error(f"ETL pipeline failed: {str(e)}")
             raise
@@ -107,17 +114,35 @@ class ETLService:
             logger.error(f"Search index synchronization failed: {str(e)}")
             raise
 
-    def batch_update_typesense(self, updates: List[Dict[str, Any]]):
+    def batch_update_typesense(self, updates: List[Dict[str, Any]]) -> None:
         """Batch update documents in Typesense."""
         try:
+            if not updates:
+                logger.info("No updates to process for Typesense")
+                return
             
             updates_jsonl = "\n".join(json.dumps(update) for update in updates)
-            # Use VectorDB's client to perform the batch import
-            self.vector_db.client.collections[self.vector_db.collection_name].documents.import_(
+            logger.debug(f"Typesense batch update payload: {updates_jsonl}")
+            
+            response = self.vector_db.client.collections[self.vector_db.collection_name].documents.import_(
                 updates_jsonl,
                 {"action": "update", "dirty_values": "coerce_or_drop"}
             )
-            logger.info(f"Batched {len(updates)} updates to Typesense")
+            
+            if isinstance(response, str):
+                response_lines = response.strip().split("\n")
+                for i, line in enumerate(response_lines):
+                    result = json.loads(line)
+                    if not result.get("success", False):
+                        logger.error(f"Typesense update failed for document {i}: {result.get('error', 'Unknown error')}")
+                        raise Exception(f"Typesense update failed: {result.get('error')}")
+            elif isinstance(response, list):
+                for i, result in enumerate(response):
+                    if not result.get("success", False):
+                        logger.error(f"Typesense update failed for document {i}: {result.get('error', 'Unknown error')}")
+                        raise Exception(f"Typesense update failed: {result.get('error')}")
+            
+            logger.info(f"Successfully batch updated {len(updates)} documents in Typesense. Response: {response}")
         except Exception as e:
             logger.error(f"Failed to batch update Typesense: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Typesense batch update failed: {str(e)}")
+            raise
