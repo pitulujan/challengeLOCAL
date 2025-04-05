@@ -1,6 +1,6 @@
 import pandas as pd
 from typing import Dict, Any, List
-from fastapi import UploadFile, HTTPException
+from fastapi import UploadFile
 import logging
 from .extractor_service import Extractor
 from .transformer_service import Transformer

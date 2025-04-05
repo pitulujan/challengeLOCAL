@@ -37,7 +37,7 @@ class BronzeDataService:
             elif 'names' in item:
                 del item['names']
 
-        # Check for mandatory columns (optional: adjust this set as needed)
+        # Check for mandatory columns 
         mandatory_columns = {"name", "orig_title", "overview", "status", "date_x", "genre", "crew", "country", "orig_lang", "budget_x", "revenue", "score"}
         for item in data_list:
             missing_columns = mandatory_columns - set(item.keys())

@@ -1,5 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
-from typing import Dict, Any, List, Tuple
+from fastapi import APIRouter, BackgroundTasks
+from typing import Dict, Any, List
 from movies_data_pipeline.services.bronze_data_service import BronzeDataService
 import logging
 
