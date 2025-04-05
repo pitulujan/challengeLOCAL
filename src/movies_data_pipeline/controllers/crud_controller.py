@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Query
 from typing import Dict, Any, List
 from movies_data_pipeline.services.bronze_data_service import BronzeDataService
 import logging
@@ -22,12 +22,31 @@ class CrudController:
             return await self.bronze_service.read(identifier)
 
         @self.router.get("/v2")
-        async def read_all_raw_v2() -> List[Dict[str, Any]]:
-            """Read all records from the Bronze layer (v2)."""
-            df = self.bronze_service.etl_service.extractor.load_bronze_data(read_only=True)
+        async def read_all_raw_v2(
+            page: int = Query(1, ge=1, description="Page number, starting from 1"),
+            page_size: int = Query(10, ge=1, le=100, description="Number of records per page, max 100")
+        ) -> Dict[str, Any]:
+            """Read all records from the Bronze layer with pagination (v2)."""
+            df, total_records = self.bronze_service.etl_service.extractor.load_paginated_bronze_data(
+                page=page, page_size=page_size, read_only=True
+            )
             if df.empty:
-                return []
-            return df.to_dict(orient="records")
+                return {
+                    "data": [],
+                    "page": page,
+                    "page_size": page_size,
+                    "total_records": 0,
+                    "total_pages": 0
+                }
+            
+            total_pages = (total_records + page_size - 1) // page_size  # Ceiling division
+            return {
+                "data": df.to_dict(orient="records"),
+                "page": page,
+                "page_size": page_size,
+                "total_records": total_records,
+                "total_pages": total_pages
+            }
 
         @self.router.put("/v1")
         async def update_raw(updates: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, Any]:
