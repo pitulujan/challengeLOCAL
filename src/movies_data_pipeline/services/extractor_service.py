@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import uuid
 import json
-from typing import Tuple
+from typing import Tuple, List, Dict, Any
 import logging
 from datetime import datetime
 
@@ -63,6 +63,39 @@ class Extractor:
             logger.debug(f"No new records to process from {file_path}")
 
         return full_df, new_records_count
+
+    def extract_from_dicts(self, data_list: List[Dict[str, Any]], batch_size: int = 1000) -> Tuple[pd.DataFrame, int]:
+        """Extract data from a list of dictionaries and integrate with existing bronze data."""
+        full_new_df = pd.DataFrame()
+        new_records_count = 0
+        existing_df = self.load_bronze_data(read_only=True)
+
+        # Convert input data to DataFrame
+        df_new = pd.DataFrame(data_list)
+        df_new = self._standardize_columns(df_new)
+        df_new = self._process_chunk(df_new)
+        df_new['uuid'] = df_new.apply(self._generate_canonical_uuid, axis=1)
+
+        if not existing_df.empty:
+            # Filter out records that already exist based on UUID
+            new_records = df_new[~df_new['uuid'].isin(existing_df['uuid'])]
+            if not new_records.empty:
+                full_new_df = pd.concat([existing_df, new_records], ignore_index=True)
+                new_records_count = len(new_records)
+            else:
+                full_new_df = existing_df  # No new records
+        else:
+            full_new_df = df_new
+            new_records_count = len(df_new)
+
+        # Save to bronze layer if there are new records
+        if new_records_count > 0:
+            full_new_df.to_parquet(self.bronze_path, index=False)
+            logger.info(f"Processed {len(full_new_df)} records from dicts, {new_records_count} new")
+        else:
+            logger.debug("No new records to process from dicts")
+
+        return full_new_df, new_records_count
 
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         if 'names' in df.columns and 'name' not in df.columns:

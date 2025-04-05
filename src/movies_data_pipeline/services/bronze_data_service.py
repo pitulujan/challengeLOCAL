@@ -37,20 +37,27 @@ class BronzeDataService:
             elif 'names' in item:
                 del item['names']
 
+        # Check for mandatory columns (optional: adjust this set as needed)
         mandatory_columns = {"name", "orig_title", "overview", "status", "date_x", "genre", "crew", "country", "orig_lang", "budget_x", "revenue", "score"}
         for item in data_list:
             missing_columns = mandatory_columns - set(item.keys())
             if missing_columns:
                 raise HTTPException(status_code=400, detail=f"Missing columns: {missing_columns}")
 
+        # Extract data and check for new records
         new_rows, new_records_count = self.etl_service.extractor.extract_from_dicts(data_list)
-        for _, row in new_rows.iterrows():
-            self.etl_service.update_typesense("create", row.to_dict())
 
         if new_records_count > 0:
+            # Only update Typesense for truly new records
+            existing_uuids = set(self.etl_service.extractor.load_bronze_data(read_only=True)['uuid'])
+            for _, row in new_rows.iterrows():
+                if row['uuid'] not in existing_uuids:
+                    self.etl_service.update_typesense("create", row.to_dict())
             background_tasks.add_task(self._run_etl)
             return {"message": f"{new_records_count} new entries added, ETL scheduled"}
-        return {"message": f"{len(new_rows)} entries processed, no new data, ETL not scheduled"}
+        else:
+            logger.debug("Record(s) already exist in bronze layer, no new data added, skipping Typesense and ETL")
+            return {"message": "No new entries added, record(s) already exist"}
 
     async def read(self, identifier: str) -> List[Dict[str, Any]]:
         """Read raw data by UUID or name."""
