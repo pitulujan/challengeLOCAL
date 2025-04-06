@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 class ETLService:
     def __init__(self):
         """Initialize the ETLService with paths and components."""
-        self.bronze_file_path = Path(os.getenv("BRONZE_BASE_PATH")) / "movies.parquet"
-        self.silver_file_path = Path(os.getenv("SILVER_BASE_PATH")) / "movies.parquet"
+        self.bronze_file_path = Path(os.getenv("BRONZE_BASE_PATH")) / "bronze_movies.parquet"
+        self.silver_file_path = Path(os.getenv("SILVER_BASE_PATH")) / "silver_movies.parquet"
         self.db_engine = create_engine(os.getenv("DATABASE_URL"))
         
         self.extractor = Extractor(self.bronze_file_path)

@@ -15,7 +15,6 @@ class DimMovie(SQLModel, table=True):
     orig_title: str
     overview: str
     status: str
-    uuid: str
     lineage_id: str
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
@@ -118,3 +117,19 @@ class LineageLog(SQLModel, table=True):
     stage: str
     transformation: str
     timestamp: datetime
+
+class RevenueByGenre(SQLModel, table=True):
+    __tablename__ = "revenue_by_genre"
+    genre_name: str = Field(primary_key=True)
+    total_revenue: float
+    lineage_id: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+class AvrScoreByYear(SQLModel, table=True):
+    __tablename__ = "avg_score_by_year"
+    year: int = Field(primary_key=True)
+    avg_score: float
+    lineage_id: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)

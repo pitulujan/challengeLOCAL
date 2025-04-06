@@ -17,12 +17,12 @@ class InitializeService:
             raise ValueError("BRONZE_BASE_PATH and SILVER_BASE_PATH must be set in environment variables")
 
         # Define specific file paths within the directories
-        self.bronze_file_path = self.bronze_base_path / "movies.parquet"
-        self.silver_file_path = self.silver_base_path / "movies.parquet"
+        self.bronze_file_path = self.bronze_base_path / "bronze_movies.parquet"
+        self.silver_file_path = self.silver_base_path / "silver_movies.parquet"
 
         # Define schemas for bronze and silver layers
         self.bronze_schema = {
-            "uuid": str,
+            "bronze_id": str,
             "name": str,
             "orig_title": str,
             "overview": str,
@@ -38,7 +38,8 @@ class InitializeService:
         }
 
         self.silver_schema = {
-            "uuid": str,
+            "silver_id": str,
+            "bronze_id": str,
             "name": str,
             "orig_title": str,
             "overview": str,

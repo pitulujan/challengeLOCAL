@@ -1,6 +1,6 @@
 import logging
 from sqlalchemy import create_engine, Table, MetaData
-from sqlalchemy.dialects.postgresql import insert  # Use PostgreSQL-specific insert
+from sqlalchemy.dialects.postgresql import insert
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class Loader:
         # Define the correct order for loading to respect foreign key constraints
         table_order = [
             "dim_movie", "dim_date", "dim_country", "dim_language", "dim_crew", "dim_genre",
-            "bridge_movie_genre", "bridge_movie_crew", "fact_movie_metrics", "lineage_log"
+            "bridge_movie_genre", "bridge_movie_crew", "fact_movie_metrics","revenue_by_genre","avg_score_by_year", "lineage_log"
         ]
 
         # Define unique constraint columns for each table (based on gold.py models)
@@ -32,6 +32,8 @@ class Loader:
             "bridge_movie_genre": ["movie_id", "genre_id"],
             "bridge_movie_crew": ["movie_id", "crew_id", "character_name"],
             "fact_movie_metrics": ["movie_id", "date_id", "country_id", "language_id"],
+            "revenue_by_genre": ["genre_name"],
+            "avg_score_by_year":["year"],
             "lineage_log": ["lineage_log_id"]  # Use primary key since no business constraint
         }
 
@@ -48,7 +50,12 @@ class Loader:
                             # Get the table object from the database
                             table = Table(table_name, self.metadata, autoload_with=self.db_engine)
                             constraint_cols = unique_constraints[table_name]
-                            #logger.debug(f"Upserting {table_name} with constraint columns: {constraint_cols}")
+
+                            # Get the list of columns in the database table
+                            db_columns = [c.name for c in table.columns]
+
+                            # Filter DataFrame to include only columns that exist in the database
+                            df = df[[col for col in df.columns if col in db_columns]]
 
                             # Convert DataFrame to list of dictionaries for SQLAlchemy
                             records = df.to_dict("records")

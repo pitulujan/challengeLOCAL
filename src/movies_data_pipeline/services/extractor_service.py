@@ -2,7 +2,6 @@ import pandas as pd
 from typing import Tuple
 from pathlib import Path
 import logging
-import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +10,15 @@ class Extractor:
         """Initialize the Extractor with the bronze Parquet file path."""
         self.bronze_file_path = Path(bronze_file_path)
 
-    def extract(self, file_path: str) -> Tuple[pd.DataFrame, int]:
-        """Extract data from a file on disk.
+    def extract(self, file_path: str, start_id: int = 0) -> Tuple[pd.DataFrame, int]:
+        """Extract data from a file on disk and assign sequential IDs.
         
         Args:
             file_path: Path to the file (CSV, JSON, or PDF)
+            start_id: The starting ID for the new data (default 0)
         
         Returns:
-            Tuple of (extracted DataFrame, number of records)
+            Tuple of (extracted DataFrame with 'id' column, number of records)
         """
         file_type = Path(file_path).suffix[1:].lower()
         filename = Path(file_path).name
@@ -33,14 +33,15 @@ class Extractor:
         else:
             raise ValueError(f"Unsupported file type '{file_type}' for {filename}")
         
-        # Add uuid if not present
-        if "uuid" not in df.columns:
-            df["uuid"] = [str(uuid.uuid4()) for _ in range(len(df))]
+        # Add sequential 'id' column if not present
+        if "bronze_id" not in df.columns:
+            num_records = len(df)
+            df["bronze_id"] = range(start_id, start_id + num_records)
         
         return df, len(df)
 
     def append_to_bronze(self, file_path: str) -> int:
-        """Append extracted data from a file to bronze/movies.parquet.
+        """Append extracted data from a file to bronze/movies.parquet with sequential IDs.
         
         Args:
             file_path: Path to the file (CSV, JSON, or PDF)
@@ -50,7 +51,15 @@ class Extractor:
         """
         filename = Path(file_path).name
         try:
-            df, record_count = self.extract(file_path)
+            # Determine the starting ID
+            if self.bronze_file_path.exists():
+                existing_df = pd.read_parquet(self.bronze_file_path, columns=["bronze_id"])
+                start_id = existing_df["bronze_id"].max() + 1 if not existing_df.empty else 0
+            else:
+                start_id = 0
+            
+            # Extract data with the next sequential IDs
+            df, record_count = self.extract(file_path, start_id=start_id)
             if record_count == 0:
                 logger.info(f"No data extracted from {filename}; skipping append")
                 return 0

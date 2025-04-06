@@ -44,3 +44,7 @@ def get_session() -> Generator[Session, None, None]:
 def get_session_direct() -> Session:
     """Provide a direct database session for non-dependency use."""
     return Session(engine)
+
+def get_db_engine():
+    """Provide the database engine for dependency injection."""
+    return engine

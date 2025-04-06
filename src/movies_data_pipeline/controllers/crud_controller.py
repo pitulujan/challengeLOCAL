@@ -1,70 +1,98 @@
-from fastapi import APIRouter, BackgroundTasks, Query
-from typing import Dict, Any, List
-from movies_data_pipeline.services.bronze_data_service import BronzeDataService
+# app/api/controllers/crud_controller.py
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, Depends, HTTPException, Query
+from typing import Dict, List, Union, Any
+from movies_data_pipeline.services.bronze_service import BronzeService
+from movies_data_pipeline.data_access.database import get_db_engine
+from movies_data_pipeline.domain.models.bronze import BronzeMovieUpdate
 import logging
-import os
 from pathlib import Path
+import os
+
+logger = logging.getLogger(__name__)
 
 class CrudController:
     def __init__(self):
-        self.router = APIRouter()
-        self.bronze_service = BronzeDataService(os.getenv("BRONZE_MOVIES_PATH"))
+        """Initialize the CrudController with a router."""
+        self.router = APIRouter(prefix="/bronze", tags=["bronze"])
         self._register_routes()
 
+    # Dependency
+    def get_bronze_service(self, db_engine=Depends(get_db_engine)) -> BronzeService:
+        bronze_file_path = Path(os.getenv("BRONZE_BASE_PATH")) / "bronze_movies.parquet"
+        return BronzeService(bronze_file_path)
+
     def _register_routes(self):
-        @self.router.post("/")
-        async def create_raw(data: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, str]:
-            """Create a new record in the Bronze layer."""
-            logging.debug(f"Received raw input: {data}")
-            return await self.bronze_service.create(data, background_tasks)
+        """Register all CRUD routes for the bronze layer."""
 
-        @self.router.get("/{identifier}")
-        async def read_raw_v1(identifier: str) -> List[Dict[str, Any]]:
-            """Read a record from the Bronze layer by UUID or movie name (v1)."""
-            return await self.bronze_service.read(identifier)
-
-        @self.router.get("/get_full_raw/")
-        async def read_all_raw_v2(
-            page: int = Query(1, ge=1, description="Page number, starting from 1"),
-            page_size: int = Query(10, ge=1, le=100, description="Number of records per page, max 100")
-        ) -> Dict[str, Any]:
-            """Read all records from the Bronze layer with pagination ."""
-            df, total_records = self.bronze_service.etl_service.extractor.load_paginated_bronze_data(
-                page=page, page_size=page_size, read_only=True
-            )
-            if df.empty:
+        @self.router.get("/data/", response_model=Dict[str, Any])
+        async def get_bronze_paginated(
+            page: int = Query(1, ge=1, description="Page number (1-based)"),
+            page_size: int = Query(10, ge=1, le=100, description="Number of records per page"),
+            bronze_service: BronzeService = Depends(self.get_bronze_service)
+        ):
+            """Fetch a paginated subset of raw bronze data."""
+            try:
+                df, page, page_size, total_records, total_pages = bronze_service.get_bronze_paginated(page, page_size)
                 return {
-                    "data": [],
+                    "data": df.to_dict(orient="records"),
                     "page": page,
                     "page_size": page_size,
-                    "total_records": 0,
-                    "total_pages": 0
+                    "total_records": total_records,
+                    "total_pages": total_pages
                 }
+            except Exception as e:
+                logger.error(f"Failed to fetch paginated bronze data: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.router.post("/data/", response_model=Dict[str, str])
+        async def seed_bronze_data(
+            background_tasks: BackgroundTasks,
+            file: UploadFile = File(...),
+            bronze_service: BronzeService = Depends(self.get_bronze_service)
+        ):
+            """Seed bronze data with an uploaded file and process in the background."""
+            temp_file_path = f"uploads/{file.filename}"
+            Path(temp_file_path).parent.mkdir(parents=True, exist_ok=True)
             
-            total_pages = (total_records + page_size - 1) // page_size  # Ceiling division
-            return {
-                "data": df.to_dict(orient="records"),
-                "page": page,
-                "page_size": page_size,
-                "total_records": total_records,
-                "total_pages": total_pages
-            }
+            try:
+                background_tasks.add_task(
+                    bronze_service.seed_bronze, file, temp_file_path
+                )
+                return {"message": f"File {file.filename} uploaded and ETL processing started"}
+            except Exception as e:
+                logger.error(f"Failed to seed bronze data: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
 
-        @self.router.put("/")
-        async def update_raw(updates: Dict[str, Any] | List[Dict[str, Any]], background_tasks: BackgroundTasks) -> Dict[str, Any]:
-            """Update one or multiple records in the Bronze layer by UUID or movie name."""
-            result = await self.bronze_service.update(updates, background_tasks)
-            return {
-                "message": result["message"],
-                "updated_records": result["updated_records"]
-            }
+        @self.router.put("/data/", response_model=Dict[str, str])
+        async def update_bronze_data(
+            updates: Union[BronzeMovieUpdate, List[BronzeMovieUpdate]],
+            background_tasks: BackgroundTasks,
+            bronze_service: BronzeService = Depends(self.get_bronze_service)
+        ):
+            """Update one or more bronze records with JSON data."""
+            update_list = [updates] if isinstance(updates, BronzeMovieUpdate) else updates
+            
+            try:
+                background_tasks.add_task(bronze_service.update_bronze, update_list)
+                return {"message": f"Updated {len(update_list)} bronze record(s) and ETL processing started"}
+            except ValueError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to update bronze data: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
 
-        @self.router.delete("/")
-        async def delete_raw(uuids: str | List[str], background_tasks: BackgroundTasks) -> Dict[str, Any]:
-            """Delete one or multiple records from the Bronze layer by UUID."""
-            result = await self.bronze_service.delete(uuids, background_tasks)
-            return {
-                "message": result["message"],
-                "deleted_count": result["deleted_count"],
-                "not_found": result["not_found"]
-            }
+        @self.router.delete("/data/{bronze_id}", response_model=Dict[str, str])
+        async def delete_bronze_data(
+            bronze_id: str,
+            background_tasks: BackgroundTasks,
+            bronze_service: BronzeService = Depends(self.get_bronze_service)
+        ):
+            """Delete a specific record from bronze by bronze_id."""
+            try:
+                background_tasks.add_task(bronze_service.delete_bronze, bronze_id)
+                return {"message": f"Record {bronze_id} deleted and ETL processing started"}
+            except ValueError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to delete bronze data: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
