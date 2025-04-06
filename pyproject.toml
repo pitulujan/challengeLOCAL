@@ -16,7 +16,8 @@ pandas = "^2.2.3"
 pydantic = "^2.7.4"
 typesense = "^1.0.3"  
 pyarrow = "^17.0.0"
-tenacity = "^8.5.0" 
+tenacity = "^8.5.0"
+
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
