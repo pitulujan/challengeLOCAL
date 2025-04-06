@@ -19,7 +19,7 @@ app = FastAPI(title="Movies Data Pipeline")
 
 
 app.include_router(seed.router, prefix="", tags=["seed"])
-app.include_router(crud.router, prefix="", tags=["crud"])
+app.include_router(crud.router, prefix="", tags=["bronze"])
 app.include_router(gold.router, prefix="", tags=["gold"])
 app.include_router(search.router, prefix="", tags=["search"])
 
@@ -35,8 +35,3 @@ async def startup_event():
     with get_session_direct() as session:
         vector_db = VectorDB(initialize=True, db_session=session)
     logger.info("Application initialized successfully")
-
-@app.get("/")
-async def root():
-    """Root endpoint without authentication."""
-    return {"message": "Welcome to the Movies Data Pipeline API!"}

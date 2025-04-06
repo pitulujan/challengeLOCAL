@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class CrudController:
     def __init__(self):
         """Initialize the CrudController with a router."""
-        self.router = APIRouter(prefix="/bronze", tags=["bronze"])
+        self.router = APIRouter()
         self._register_routes()
 
     # Dependency
@@ -43,26 +43,19 @@ class CrudController:
             except Exception as e:
                 logger.error(f"Failed to fetch paginated bronze data: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
-
-        @self.router.post("/data/", response_model=Dict[str, str])
-        async def seed_bronze_data(
-            background_tasks: BackgroundTasks,
-            file: UploadFile = File(...),
+        
+        @self.router.get("/files/", response_model=Dict[str, List[str]])
+        async def list_bronze_files(
             bronze_service: BronzeService = Depends(self.get_bronze_service)
         ):
-            """Seed bronze data with an uploaded file and process in the background."""
-            temp_file_path = f"uploads/{file.filename}"
-            Path(temp_file_path).parent.mkdir(parents=True, exist_ok=True)
-            
+            """List all files in the bronze directory, excluding bronze_movies.parquet."""
             try:
-                background_tasks.add_task(
-                    bronze_service.seed_bronze, file, temp_file_path
-                )
-                return {"message": f"File {file.filename} uploaded and ETL processing started"}
+                files = bronze_service.list_bronze_files()
+                return {"files": files}
             except Exception as e:
-                logger.error(f"Failed to seed bronze data: {str(e)}")
+                logger.error(f"Failed to list bronze files: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
-
+            
         @self.router.put("/data/", response_model=Dict[str, str])
         async def update_bronze_data(
             updates: Union[BronzeMovieUpdate, List[BronzeMovieUpdate]],
@@ -96,3 +89,4 @@ class CrudController:
             except Exception as e:
                 logger.error(f"Failed to delete bronze data: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
+            

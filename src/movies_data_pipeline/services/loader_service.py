@@ -133,6 +133,7 @@ class Loader:
                 # Sync with Typesense (if applicable)
                 with Session(self.db_engine) as session:
                     vector_db = VectorDB(initialize=False, db_session=session)
+                    logger.info(f"Initializing sync with gold layer")
                     vector_db._sync_with_gold()
         except Exception as e:
             logger.error(f"Error during load_gold: {str(e)}")

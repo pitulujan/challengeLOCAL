@@ -100,3 +100,18 @@ class BronzeService:
         if gold_tables:
             self.etl_service.load(gold_tables)
         logger.info(f"Deleted bronze record with bronze_id {bronze_id} and triggered ETL")
+
+    def list_bronze_files(self) -> List[str]:
+        """List all files in the bronze directory, excluding bronze_movies.parquet."""
+        bronze_dir = self.bronze_file_path.parent  # Get the directory containing bronze_movies.parquet
+        if not bronze_dir.exists():
+            logger.info(f"Bronze directory {bronze_dir} does not exist")
+            return []
+        
+        # List all files in the directory, excluding bronze_movies.parquet
+        files = [
+            f.name for f in bronze_dir.iterdir() 
+            if f.is_file() and f.name != "bronze_movies.parquet"
+        ]
+        logger.info(f"Found {len(files)} files in bronze directory {bronze_dir}")
+        return files
