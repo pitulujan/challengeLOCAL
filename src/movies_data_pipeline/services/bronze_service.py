@@ -23,7 +23,7 @@ class BronzeService:
         self.process_bronze_data(temp_file_path)
 
     def process_bronze_data(self, file_path: str):
-        """Append data to bronze and run ETL transformation and loading."""
+        """Append data to bronze and run ETL transformation and loading for the new file."""
         filename = Path(file_path).name
         try:
             records_appended = self.etl_service.extractor.append_to_bronze(file_path)
@@ -31,12 +31,12 @@ class BronzeService:
                 logger.info(f"No new records appended from {filename}; skipping ETL")
                 return
             logger.info(f"Starting transformation for {filename}")
-            gold_tables = self.etl_service.transform()
+            gold_tables = self.etl_service.transform(file_path)  # Pass the new file path
             if gold_tables:
                 self.etl_service.load(gold_tables)
                 logger.info(f"ETL completed for {filename}: transformed and loaded {len(gold_tables)} tables")
             else:
-                logger.info(f"No new data to transform from {filename}; ETL stopped after silver")
+                logger.info(f"No new unique data to transform from {filename}; ETL stopped after silver")
         except Exception as e:
             logger.error(f"ETL processing failed for {filename}: {str(e)}")
             raise

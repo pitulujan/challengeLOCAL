@@ -4,116 +4,122 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import os
-from movies_data_pipeline.data_access.vector_db import VectorDB
-from movies_data_pipeline.data_access.database import get_session_direct 
-from sqlalchemy.orm import Session
+from .extractor_service import Extractor
 
 logger = logging.getLogger(__name__)
 
 class Transformer:
-    def __init__(self, bronze_file_path: str, db_session: Session = None):
-        """Initialize the Transformer with bronze file path."""
+    def __init__(self, bronze_file_path: str, silver_file_path: str = None):
+        """Initialize the Transformer with bronze and silver file paths."""
         self.bronze_file_path = Path(bronze_file_path)
         self.silver_file_path = Path(os.getenv("SILVER_BASE_PATH")) / "silver_movies.parquet"
-        self.db_session = db_session  
 
-
-    def transform(self) -> Dict[str, pd.DataFrame]:
-        logger.info("Starting transformation")
+    def transform(self, new_file_path: str) -> Dict[str, pd.DataFrame]:
+        """Transform only the newly uploaded file's data to silver and gold layers."""
+        logger.info("Starting transformation for new file")
+        
+        # Extract only the new file's data
         try:
-            if not self.bronze_file_path.exists():
-                logger.info(f"Bronze file {self.bronze_file_path} does not exist; returning empty result")
+            new_df, record_count = Extractor(self.bronze_file_path).extract(new_file_path)
+            if record_count == 0:
+                logger.info(f"No new data in {new_file_path}; skipping transformation")
                 return {}
-            bronze_df = pd.read_parquet(self.bronze_file_path)
         except Exception as e:
-            logger.error(f"Failed to load bronze data: {str(e)}")
+            logger.error(f"Failed to extract new data from {new_file_path}: {str(e)}")
             raise
 
-        if bronze_df.empty:
-            logger.info("No new data to transform; returning empty result")
-            return {}
-
-        # Create silver layer
-        silver_df, lineage_entries = self._create_silver_layer(bronze_df)
+        # Create silver layer with deduplication
+        silver_df, new_silver_df, lineage_entries = self._create_silver_layer(new_df, new_file_path)
         
-        # Save silver layer
+        # Save updated silver layer (even if no new records, to update timestamps)
         silver_df.to_parquet(self.silver_file_path, index=False)
+        logger.info(f"Updated silver layer with {len(new_silver_df)} new unique records")
         
-        # Create gold tables
-        gold_tables = self._create_gold_tables(silver_df, lineage_entries)
-      
+        # If no new records, skip gold table creation
+        if new_silver_df.empty:
+            logger.info("No new unique records to process into gold layer; skipping")
+            return {}
+        
+        # Create gold tables from new deduplicated records
+        gold_tables = self._create_gold_tables(new_silver_df, lineage_entries)
+        
         logger.info("Transformation completed successfully")
         return gold_tables
 
-    def _create_silver_layer(self, df: pd.DataFrame) -> tuple[pd.DataFrame, List[Dict[str, Any]]]:
-        """Create silver layer by cleaning and standardizing bronze data with lineage tracking."""
-        df = self._standardize_columns(df)
-        if "bronze_id" not in df.columns:
-            raise KeyError("Input bronze data must contain a 'bronze_id' column.")
+    def _create_silver_layer(self, new_df: pd.DataFrame, new_file_path: str) -> tuple[pd.DataFrame, pd.DataFrame, List[Dict[str, Any]]]:
+        """Create silver layer by processing new data, deduplicating against existing silver data."""
+        logger.info("Creating silver layer from new data")
         
-        lineage_entries = []
-        lineage_log_id_counter = 1
+        # Standardize new data
+        new_df = self._standardize_columns(new_df)
+        new_df["bronze_id"] = range(1, len(new_df) + 1)  # Temporary bronze_id for new data
         
-        # Initial load from bronze
-        for _, row in df.iterrows():
-            lineage_entries.append({
-                "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["bronze_id"],
-                "source_path": str(self.bronze_file_path),
-                "stage": "bronze",
-                "transformation": "loaded",
-                "timestamp": datetime.now()
-            })
-            lineage_log_id_counter += 1
+        # Process dates to ensure 'release_date' exists before deduplication
+        new_df = self._process_dates(new_df)
         
-        # Process dates
-        df = self._process_dates(df)
-        for _, row in df.iterrows():
-            lineage_entries.append({
-                "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["bronze_id"],
-                "source_path": str(self.bronze_file_path),
-                "stage": "silver",
-                "transformation": "dates_processed",
-                "timestamp": datetime.now()
-            })
-            lineage_log_id_counter += 1
+        # Load existing silver data
+        if self.silver_file_path.exists():
+            existing_silver = pd.read_parquet(self.silver_file_path)
+            if "release_date" not in existing_silver.columns:
+                existing_silver = self._process_dates(existing_silver)
+            if "crew_pairs" not in existing_silver.columns:
+                existing_silver = self._process_genre_and_crew(existing_silver)
+            logger.info(f"Loaded {len(existing_silver)} existing silver records")
+        else:
+            existing_silver = pd.DataFrame(columns=new_df.columns)
+            logger.info("No existing silver data; starting fresh")
         
-        # Process genre and crew
-        df = self._process_genre_and_crew(df)
-        for _, row in df.iterrows():
-            lineage_entries.append({
-                "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["bronze_id"],
-                "source_path": str(self.bronze_file_path),
-                "stage": "silver",
-                "transformation": "genre_crew_processed",
-                "timestamp": datetime.now()
-            })
-            lineage_log_id_counter += 1
+        # Combine new and existing data
+        combined_df = pd.concat([existing_silver, new_df], ignore_index=True)
         
-        # Finalize silver layer
+        # Process genre and crew on the combined data before deduplication
+        combined_df = self._process_genre_and_crew(combined_df)
+        
+        # Define unique key for deduplication
+        unique_key = ["name", "orig_title"]
+        
+        # Check if all unique key columns exist
+        missing_cols = [col for col in unique_key if col not in combined_df.columns]
+        if missing_cols:
+            logger.error(f"Missing columns in combined_df for deduplication: {missing_cols}")
+            raise KeyError(f"Missing columns for unique key: {missing_cols}")
+        
+        # Identify duplicates
+        duplicates = combined_df[combined_df.duplicated(subset=unique_key, keep="first")]
+        if not duplicates.empty:
+            logger.info(f"Found {len(duplicates)} duplicate records based on {unique_key}")
+            # for _, dup in duplicates.iterrows():
+            #     logger.debug(f"Duplicate record: {dup[unique_key].to_dict()}")
+
+        # Keep only unique records (first occurrence)
+        silver_df = combined_df.drop_duplicates(subset=unique_key, keep="first")
+        
+        # Identify new unique records added from this upload
+        new_silver_df = silver_df[~silver_df["bronze_id"].isin(existing_silver["bronze_id"])]
+        logger.info(f"Identified {len(new_silver_df)} new unique records")
+        
+        # Add timestamps and silver_id to full silver_df using .loc to avoid warnings
         current_time = datetime.now()
-        df["created_at"] = current_time
-        df["updated_at"] = current_time
-        df["silver_id"] = range(1, len(df) + 1)  # Assign silver_id for later use
+        silver_df.loc[:, "created_at"] = silver_df["created_at"].fillna(current_time)
+        silver_df.loc[:, "updated_at"] = current_time
+        silver_df.loc[:, "silver_id"] = range(1, len(silver_df) + 1)
         
-        for _, row in df.iterrows():
+        # Lineage tracking for new records
+        lineage_entries = []
+        for _, row in new_silver_df.iterrows():
             lineage_entries.append({
-                "lineage_log_id": lineage_log_id_counter,
+                "lineage_log_id": len(lineage_entries) + 1,
                 "record_id": row["bronze_id"],
-                "source_path": str(self.bronze_file_path),
+                "source_path": new_file_path,
                 "stage": "silver",
-                "transformation": "finalized",
+                "transformation": "deduplicated_and_processed",
                 "timestamp": current_time
             })
-            lineage_log_id_counter += 1
         
-        return df, lineage_entries
+        return silver_df, new_silver_df, lineage_entries
 
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Standardize column names and ensure 'name' and 'orig_title' are not null."""
-
         if "names" in df.columns:
             if "name" not in df.columns:
                 df["name"] = df["names"]
@@ -141,10 +147,11 @@ class Transformer:
         date_col = next((col for col in possible_date_cols if col in df.columns), None)
         
         if date_col:
-            df = df.rename(columns={date_col: "date_x"})
-            df["date_x"] = df["date_x"].astype(str).str.strip()
-            df["date_x"] = pd.to_datetime(df["date_x"], format="%m/%d/%Y", errors="coerce")
+            df = df.rename(columns={date_col: "release_date"})
+            df["release_date"] = df["release_date"].astype(str).str.strip()
+            df["release_date"] = pd.to_datetime(df["release_date"], errors="coerce")
         else:
+            logger.error("Input data must contain a date column ('date_x', 'release_date', or 'date')")
             raise KeyError("Input data must contain a date column ('date_x', 'release_date', or 'date')")
         
         return df
@@ -171,223 +178,263 @@ class Transformer:
         return pairs
 
     def _create_gold_tables(self, silver_df: pd.DataFrame, lineage_entries: List[Dict[str, Any]]) -> Dict[str, pd.DataFrame]:
-        """Create gold layer tables with unique constraints."""
+        """Create gold layer tables from silver records without generating IDs in Python."""
         current_time = datetime.now()
         lineage_log_id_counter = max(entry["lineage_log_id"] for entry in lineage_entries) + 1 if lineage_entries else 1
-        
-        # Create dim_movie with silver_id
-        dim_movie = silver_df[["name", "orig_title", "overview", "status", "silver_id"]].drop_duplicates(subset=["name", "orig_title"])
-        # Rename silver_id to lineage_id
-        dim_movie = dim_movie.rename(columns={"silver_id": "lineage_id"})
-        # Add movie_id and timestamps
-        dim_movie["movie_id"] = range(1, len(dim_movie) + 1)
+
+        ### Dimension Tables ###
+        # DimMovie: Use name and orig_title as natural keys for lineage_id
+        dim_movie = silver_df[["name", "orig_title", "overview", "status"]].drop_duplicates(subset=["name", "orig_title"])
+        dim_movie["lineage_id"] = dim_movie["name"] + "_" + dim_movie["orig_title"]
         dim_movie["created_at"] = current_time
         dim_movie["updated_at"] = current_time
-        # Reorder columns to match the database schema
-        dim_movie = dim_movie[["movie_id", "name", "orig_title", "overview", "status", "lineage_id", "created_at", "updated_at"]]
+        dim_movie = dim_movie[["name", "orig_title", "overview", "status", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_movie.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["movie_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_movie",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Assign movie_id to silver_df
-        silver_df = silver_df.merge(dim_movie[["name", "orig_title", "movie_id"]], on=["name", "orig_title"], how="left")
-        
-        # Create dim_date
-        dim_date = silver_df[["date_x"]].drop_duplicates()
-        dim_date["release_date"] = pd.to_datetime(dim_date["date_x"])
+
+        # DimDate: Use year, month, day as natural keys
+        dim_date = silver_df[["release_date"]].drop_duplicates()
         dim_date["year"] = dim_date["release_date"].dt.year
         dim_date["month"] = dim_date["release_date"].dt.month
         dim_date["day"] = dim_date["release_date"].dt.day
-        dim_date = dim_date.drop_duplicates(subset=["year", "month", "day"])
-        dim_date["date_id"] = range(1, len(dim_date) + 1)
-        dim_date["lineage_id"] = range(1, len(dim_date) + 1)  # Add lineage_id
-        dim_date = dim_date.drop(columns=["date_x"])
+        dim_date["lineage_id"] = dim_date["year"].astype(str) + "_" + dim_date["month"].astype(str) + "_" + dim_date["day"].astype(str)
         dim_date["created_at"] = current_time
         dim_date["updated_at"] = current_time
-        # Reorder columns to include lineage_id
-        dim_date = dim_date[["date_id", "release_date", "year", "month", "day", "lineage_id", "created_at", "updated_at"]]
+        dim_date = dim_date[["release_date", "year", "month", "day", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_date.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["date_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_date",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Dimension: dim_country
+
+        # DimCountry: Use country_name as natural key
         dim_country = silver_df[["country"]].drop_duplicates()
         dim_country = dim_country.rename(columns={"country": "country_name"})
-        dim_country["country_id"] = range(1, len(dim_country) + 1)
-        dim_country["lineage_id"] = range(1, len(dim_country) + 1)  # Add lineage_id
+        dim_country["lineage_id"] = dim_country["country_name"]
         dim_country["created_at"] = current_time
         dim_country["updated_at"] = current_time
-        dim_country = dim_country[["country_id", "country_name", "lineage_id", "created_at", "updated_at"]]
+        dim_country = dim_country[["country_name", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_country.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["country_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_country",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Dimension: dim_language
+
+        # DimLanguage: Use language_name as natural key
         dim_language = silver_df[["orig_lang"]].drop_duplicates()
         dim_language = dim_language.rename(columns={"orig_lang": "language_name"})
-        dim_language["language_id"] = range(1, len(dim_language) + 1)
-        dim_language["lineage_id"] = range(1, len(dim_language) + 1)  # Add lineage_id
+        dim_language["lineage_id"] = dim_language["language_name"]
         dim_language["created_at"] = current_time
         dim_language["updated_at"] = current_time
-        dim_language = dim_language[["language_id", "language_name", "lineage_id", "created_at", "updated_at"]]
+        dim_language = dim_language[["language_name", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_language.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["language_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_language",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Dimension: dim_crew
-        crew_flat = silver_df.explode("crew_pairs")[["crew_pairs"]].dropna()
+
+        # DimCrew: Use actor_name and character_name as natural keys
+        crew_flat = silver_df.explode("crew_pairs").dropna(subset=["crew_pairs"])
         dim_crew = pd.DataFrame(crew_flat["crew_pairs"].tolist())
         dim_crew = dim_crew.drop_duplicates(subset=["actor_name", "character_name"])
-        dim_crew["crew_id"] = range(1, len(dim_crew) + 1)
-        dim_crew["lineage_id"] = range(1, len(dim_crew) + 1)  # Add lineage_id
+        dim_crew["lineage_id"] = dim_crew["actor_name"] + "_" + dim_crew["character_name"]
         dim_crew["created_at"] = current_time
         dim_crew["updated_at"] = current_time
-        dim_crew = dim_crew[["crew_id", "actor_name", "character_name", "lineage_id", "created_at", "updated_at"]]
+        dim_crew = dim_crew[["actor_name", "character_name", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_crew.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["crew_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_crew",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Dimension: dim_genre
+
+        # DimGenre: Use genre_name as natural key
         dim_genre = silver_df.explode("genre_list")[["genre_list"]].drop_duplicates()
         dim_genre = dim_genre.rename(columns={"genre_list": "genre_name"})
-        dim_genre["genre_id"] = range(1, len(dim_genre) + 1)
-        dim_genre["lineage_id"] = range(1, len(dim_genre) + 1)  # Add lineage_id
+        dim_genre["lineage_id"] = dim_genre["genre_name"]
         dim_genre["created_at"] = current_time
         dim_genre["updated_at"] = current_time
-        dim_genre = dim_genre[["genre_id", "genre_name", "created_at", "lineage_id", "updated_at"]]
+        dim_genre = dim_genre[["genre_name", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in dim_genre.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["genre_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_dim_genre",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Bridge: bridge_movie_genre
-        bridge_movie_genre = silver_df.explode("genre_list")[["movie_id", "genre_list"]]
-        bridge_movie_genre = bridge_movie_genre.merge(dim_genre[["genre_id", "genre_name"]], left_on="genre_list", right_on="genre_name", how="left")
-        bridge_movie_genre = bridge_movie_genre.drop_duplicates(subset=["movie_id", "genre_id"])
-        bridge_movie_genre["bridge_id"] = range(1, len(bridge_movie_genre) + 1)
-        bridge_movie_genre["lineage_id"] = range(1, len(bridge_movie_genre) + 1)  # Add lineage_id
+
+        ### Bridge and Fact Tables ###
+        # BridgeMovieGenre: Deduplicate by movie_lineage_id and genre_lineage_id
+        bridge_movie_genre = silver_df.explode("genre_list")[["name", "orig_title", "genre_list"]].drop_duplicates()
+        bridge_movie_genre = bridge_movie_genre.merge(
+            dim_movie[["name", "orig_title", "lineage_id"]], 
+            on=["name", "orig_title"], 
+            how="left"
+        ).rename(columns={"lineage_id": "movie_lineage_id"})
+        bridge_movie_genre = bridge_movie_genre.merge(
+            dim_genre[["genre_name", "lineage_id"]], 
+            left_on="genre_list", 
+            right_on="genre_name", 
+            how="left"
+        ).rename(columns={"lineage_id": "genre_lineage_id"})
+        bridge_movie_genre["lineage_id"] = bridge_movie_genre["movie_lineage_id"] + "_" + bridge_movie_genre["genre_lineage_id"]
         bridge_movie_genre["created_at"] = current_time
         bridge_movie_genre["updated_at"] = current_time
-        bridge_movie_genre = bridge_movie_genre[["bridge_id", "movie_id", "genre_id", "lineage_id", "created_at", "updated_at"]]
+        bridge_movie_genre = bridge_movie_genre[["movie_lineage_id", "genre_lineage_id", "lineage_id", "created_at", "updated_at"]]
+        # Deduplicate
+        bridge_movie_genre = bridge_movie_genre.drop_duplicates(subset=["movie_lineage_id", "genre_lineage_id"], keep="last")
+        logger.info(f"Deduplicated bridge_movie_genre to {len(bridge_movie_genre)} unique records")
         
         for _, row in bridge_movie_genre.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["bridge_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_bridge_movie_genre",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Bridge: bridge_movie_crew
-        bridge_movie_crew = silver_df.explode("crew_pairs")[["movie_id", "crew_pairs"]]
-        bridge_movie_crew = bridge_movie_crew.dropna(subset=["crew_pairs"])
+
+        # BridgeMovieCrew: Deduplicate by movie_lineage_id, crew_lineage_id, and character_name
+        bridge_movie_crew = silver_df.explode("crew_pairs")[["name", "orig_title", "crew_pairs"]].dropna(subset=["crew_pairs"])
         bridge_movie_crew = bridge_movie_crew.reset_index(drop=True)
         crew_expanded = pd.DataFrame(bridge_movie_crew["crew_pairs"].tolist())
-        bridge_movie_crew = pd.concat([bridge_movie_crew[["movie_id"]], crew_expanded], axis=1)
-        bridge_movie_crew = bridge_movie_crew.merge(dim_crew[["crew_id", "actor_name", "character_name"]], on=["actor_name", "character_name"], how="left")
-        bridge_movie_crew = bridge_movie_crew.drop_duplicates(subset=["movie_id", "crew_id", "character_name"])
-        bridge_movie_crew["bridge_id"] = range(1, len(bridge_movie_crew) + 1)
-        bridge_movie_crew["lineage_id"] = range(1, len(bridge_movie_crew) + 1)  # Add lineage_id
+        bridge_movie_crew = pd.concat([bridge_movie_crew[["name", "orig_title"]], crew_expanded], axis=1)
+        bridge_movie_crew = bridge_movie_crew.merge(
+            dim_movie[["name", "orig_title", "lineage_id"]], 
+            on=["name", "orig_title"], 
+            how="left"
+        ).rename(columns={"lineage_id": "movie_lineage_id"})
+        bridge_movie_crew = bridge_movie_crew.merge(
+            dim_crew[["actor_name", "character_name", "lineage_id"]], 
+            on=["actor_name", "character_name"], 
+            how="left"
+        ).rename(columns={"lineage_id": "crew_lineage_id"})
+        bridge_movie_crew["lineage_id"] = bridge_movie_crew["movie_lineage_id"] + "_" + bridge_movie_crew["crew_lineage_id"]
         bridge_movie_crew["created_at"] = current_time
         bridge_movie_crew["updated_at"] = current_time
-        bridge_movie_crew = bridge_movie_crew[["bridge_id", "movie_id", "crew_id", "lineage_id", "character_name", "created_at", "updated_at"]]
+        bridge_movie_crew = bridge_movie_crew[["movie_lineage_id", "crew_lineage_id", "character_name", "lineage_id", "created_at", "updated_at"]]
+        # Deduplicate
+        bridge_movie_crew = bridge_movie_crew.drop_duplicates(subset=["movie_lineage_id", "crew_lineage_id", "character_name"], keep="last")
+        logger.info(f"Deduplicated bridge_movie_crew to {len(bridge_movie_crew)} unique records")
         
         for _, row in bridge_movie_crew.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["bridge_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_bridge_movie_crew",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Fact: fact_movie_metrics
-        fact_movie_metrics = silver_df[["movie_id", "date_x", "country", "orig_lang", "budget_x", "revenue", "score"]]
-        fact_movie_metrics = fact_movie_metrics.merge(dim_date[["release_date", "date_id"]], left_on="date_x", right_on="release_date", how="left")
-        fact_movie_metrics = fact_movie_metrics.merge(dim_country[["country_name", "country_id"]], left_on="country", right_on="country_name", how="left")
-        fact_movie_metrics = fact_movie_metrics.merge(dim_language[["language_name", "language_id"]], left_on="orig_lang", right_on="language_name", how="left")
-        fact_movie_metrics = fact_movie_metrics.drop_duplicates(subset=["movie_id", "date_id", "country_id", "language_id"])
-        fact_movie_metrics["fact_id"] = range(1, len(fact_movie_metrics) + 1)
-        fact_movie_metrics["lineage_id"] = range(1, len(fact_movie_metrics) + 1)  # Add lineage_id
+
+        # FactMovieMetrics: Deduplicate by movie_lineage_id, date_lineage_id, country_lineage_id, language_lineage_id
+        fact_movie_metrics = silver_df[["name", "orig_title", "release_date", "country", "orig_lang", "budget_x", "revenue", "score"]]
+        fact_movie_metrics = fact_movie_metrics.merge(
+            dim_movie[["name", "orig_title", "lineage_id"]], 
+            on=["name", "orig_title"], 
+            how="left"
+        ).rename(columns={"lineage_id": "movie_lineage_id"})
+        fact_movie_metrics = fact_movie_metrics.merge(
+            dim_date[["release_date", "lineage_id"]], 
+            on="release_date", 
+            how="left"
+        ).rename(columns={"lineage_id": "date_lineage_id"})
+        fact_movie_metrics = fact_movie_metrics.merge(
+            dim_country[["country_name", "lineage_id"]], 
+            left_on="country", 
+            right_on="country_name", 
+            how="left"
+        ).rename(columns={"lineage_id": "country_lineage_id"})
+        fact_movie_metrics = fact_movie_metrics.merge(
+            dim_language[["language_name", "lineage_id"]], 
+            left_on="orig_lang", 
+            right_on="language_name", 
+            how="left"
+        ).rename(columns={"lineage_id": "language_lineage_id"})
+        fact_movie_metrics["lineage_id"] = (
+            fact_movie_metrics["movie_lineage_id"] + "_" + 
+            fact_movie_metrics["date_lineage_id"] + "_" + 
+            fact_movie_metrics["country_lineage_id"] + "_" + 
+            fact_movie_metrics["language_lineage_id"]
+        )
         fact_movie_metrics["created_at"] = current_time
         fact_movie_metrics["updated_at"] = current_time
         fact_movie_metrics = fact_movie_metrics.rename(columns={"budget_x": "budget"})
-        fact_movie_metrics = fact_movie_metrics[["fact_id", "movie_id", "date_id", "country_id", "language_id", "budget", "revenue", "score", "lineage_id", "created_at", "updated_at"]]
+        fact_movie_metrics = fact_movie_metrics[[
+            "movie_lineage_id", "date_lineage_id", "country_lineage_id", "language_lineage_id",
+            "budget", "revenue", "score", "lineage_id", "created_at", "updated_at"
+        ]]
+        # Deduplicate
+        fact_movie_metrics = fact_movie_metrics.drop_duplicates(
+            subset=["movie_lineage_id", "date_lineage_id", "country_lineage_id", "language_lineage_id"], 
+            keep="last"
+        )
+        logger.info(f"Deduplicated fact_movie_metrics to {len(fact_movie_metrics)} unique records")
         
         for _, row in fact_movie_metrics.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": row["fact_id"],
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "created_fact_movie_metrics",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Aggregate: revenue_by_genre
-        movie_revenue = fact_movie_metrics[["movie_id", "revenue"]].drop_duplicates()
-        revenue_by_genre = movie_revenue.merge(bridge_movie_genre, on="movie_id") \
-                                        .merge(dim_genre, on="genre_id") \
-                                        .groupby("genre_name")["revenue"].sum().reset_index() \
-                                        .rename(columns={"revenue": "total_revenue"})
-        revenue_by_genre["lineage_id"] = range(1, len(revenue_by_genre) + 1)  # Add lineage_id
+
+        ### Aggregate Tables ###
+        # RevenueByGenre: Use genre_name as natural key
+        temp_movie_revenue = fact_movie_metrics[["movie_lineage_id", "revenue"]].drop_duplicates()
+        temp_bridge = bridge_movie_genre[["movie_lineage_id", "genre_lineage_id"]].drop_duplicates()
+        revenue_by_genre = temp_movie_revenue.merge(temp_bridge, on="movie_lineage_id").merge(
+            dim_genre[["genre_name", "lineage_id"]], 
+            left_on="genre_lineage_id", 
+            right_on="lineage_id"
+        ).groupby("genre_name")["revenue"].sum().reset_index().rename(columns={"revenue": "total_revenue"})
+        revenue_by_genre["lineage_id"] = revenue_by_genre["genre_name"]
         revenue_by_genre["created_at"] = current_time
         revenue_by_genre["updated_at"] = current_time
-
-        # Log the aggregation transformation for each genre
+        revenue_by_genre = revenue_by_genre[["genre_name", "total_revenue", "lineage_id", "created_at", "updated_at"]]
+        
         for _, row in revenue_by_genre.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
@@ -398,32 +445,34 @@ class Transformer:
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-        
-        # Aggregate: avg_score_by_year
-        avg_score_by_year = fact_movie_metrics.merge(dim_date, on="date_id") \
-                                            .groupby("year")["score"].mean().reset_index() \
-                                            .rename(columns={"score": "avg_score"})
-        avg_score_by_year["lineage_id"] = range(1, len(avg_score_by_year) + 1)  # Add lineage_id
+
+        # AvgScoreByYear: Use year as natural key
+        avg_score_by_year = fact_movie_metrics.merge(
+            dim_date[["lineage_id", "year"]], 
+            left_on="date_lineage_id", 
+            right_on="lineage_id"
+        ).groupby("year")["score"].mean().reset_index().rename(columns={"score": "avg_score"})
+        avg_score_by_year["lineage_id"] = avg_score_by_year["year"].astype(str)
         avg_score_by_year["created_at"] = current_time
         avg_score_by_year["updated_at"] = current_time
+        avg_score_by_year = avg_score_by_year[["year", "avg_score", "lineage_id", "created_at", "updated_at"]]
         
         for _, row in avg_score_by_year.iterrows():
             lineage_entries.append({
                 "lineage_log_id": lineage_log_id_counter,
-                "record_id": "aggregate_avg_score_by_year",
+                "record_id": row["lineage_id"],
                 "source_path": str(self.bronze_file_path),
                 "stage": "gold",
                 "transformation": "aggregated_avg_score_by_year",
                 "timestamp": current_time
             })
             lineage_log_id_counter += 1
-            
-        # Lineage log table
+
+        # LineageLog: Use lineage_id from other tables
         lineage_df = pd.DataFrame(lineage_entries)
         lineage_df = lineage_df.rename(columns={"record_id": "lineage_id"})
         
         return {
-            "fact_movie_metrics": fact_movie_metrics,
             "dim_movie": dim_movie,
             "dim_date": dim_date,
             "dim_country": dim_country,
@@ -432,6 +481,7 @@ class Transformer:
             "dim_genre": dim_genre,
             "bridge_movie_genre": bridge_movie_genre,
             "bridge_movie_crew": bridge_movie_crew,
+            "fact_movie_metrics": fact_movie_metrics,
             "revenue_by_genre": revenue_by_genre,
             "avg_score_by_year": avg_score_by_year,
             "lineage_log": lineage_df

@@ -11,15 +11,7 @@ class Extractor:
         self.bronze_file_path = Path(bronze_file_path)
 
     def extract(self, file_path: str, start_id: int = 0) -> Tuple[pd.DataFrame, int]:
-        """Extract data from a file on disk and assign sequential IDs.
-        
-        Args:
-            file_path: Path to the file (CSV, JSON, or PDF)
-            start_id: The starting ID for the new data (default 0)
-        
-        Returns:
-            Tuple of (extracted DataFrame with 'id' column, number of records)
-        """
+        """Extract data from a file on disk and assign sequential IDs."""
         file_type = Path(file_path).suffix[1:].lower()
         filename = Path(file_path).name
         
@@ -33,7 +25,7 @@ class Extractor:
         else:
             raise ValueError(f"Unsupported file type '{file_type}' for {filename}")
         
-        # Add sequential 'id' column if not present
+        # Add sequential 'bronze_id' column if not present
         if "bronze_id" not in df.columns:
             num_records = len(df)
             df["bronze_id"] = range(start_id, start_id + num_records)
@@ -41,14 +33,7 @@ class Extractor:
         return df, len(df)
 
     def append_to_bronze(self, file_path: str) -> int:
-        """Append extracted data from a file to bronze/movies.parquet with sequential IDs.
-        
-        Args:
-            file_path: Path to the file (CSV, JSON, or PDF)
-        
-        Returns:
-            Number of records appended
-        """
+        """Append extracted data from a file to bronze/movies.parquet with sequential IDs."""
         filename = Path(file_path).name
         try:
             # Determine the starting ID
