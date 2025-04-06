@@ -48,7 +48,7 @@ class Loader:
                             # Get the table object from the database
                             table = Table(table_name, self.metadata, autoload_with=self.db_engine)
                             constraint_cols = unique_constraints[table_name]
-                            logger.debug(f"Upserting {table_name} with constraint columns: {constraint_cols}")
+                            #logger.debug(f"Upserting {table_name} with constraint columns: {constraint_cols}")
 
                             # Convert DataFrame to list of dictionaries for SQLAlchemy
                             records = df.to_dict("records")

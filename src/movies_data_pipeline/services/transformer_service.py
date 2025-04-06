@@ -34,8 +34,8 @@ class Transformer:
 
         # Create silver layer
         silver_df, lineage_entries = self._create_silver_layer(bronze_df)
-        
-        # Save silver layer (optional, depending on your pipeline)
+       
+        # Save silver layer
         silver_df.to_parquet(self.silver_file_path, index=False)
         
         # Create gold tables with proper column selection
@@ -141,6 +141,8 @@ class Transformer:
 
     def _process_genre_and_crew(self, df: pd.DataFrame) -> pd.DataFrame:
         """Process genre and crew data into structured formats."""
+        # Replace NaN or empty genre with "Unknown"
+        df["genre"] = df["genre"].fillna("Unknown").replace("", "Unknown")
         df["genre_list"] = df["genre"].str.split(",\s+")
         df["crew_pairs"] = df["crew"].apply(self._parse_crew)
         return df
@@ -269,6 +271,28 @@ class Transformer:
         fact_movie_metrics["updated_at"] = current_time
         fact_movie_metrics = fact_movie_metrics[["fact_id", "movie_id", "date_id", "country_id", "language_id", "budget", "revenue", "score", "lineage_id", "created_at", "updated_at"]]
         
+        # Aggregate: revenue_by_genre
+        movie_revenue = fact_movie_metrics[["movie_id", "revenue"]].drop_duplicates()
+        revenue_by_genre = movie_revenue.merge(bridge_movie_genre, on="movie_id") \
+                                        .merge(dim_genre, on="genre_id") \
+                                        .groupby("genre_name")["revenue"].sum().reset_index() \
+                                        .rename(columns={"revenue": "total_revenue"})
+        revenue_by_genre_lineage_id = str(uuid.uuid4())
+        revenue_by_genre["lineage_id"] = revenue_by_genre_lineage_id
+        revenue_by_genre["created_at"] = current_time
+        revenue_by_genre["updated_at"] = current_time
+
+        # Aggregate: avg_score_by_year
+        avg_score_by_year = fact_movie_metrics.merge(dim_date, on="date_id") \
+                                            .groupby("year")["score"].mean().reset_index() \
+                                            .rename(columns={"score": "avg_score"})
+        avg_score_by_year_lineage_id = str(uuid.uuid4())
+        avg_score_by_year["lineage_id"] = avg_score_by_year_lineage_id
+        avg_score_by_year["created_at"] = current_time
+        avg_score_by_year["updated_at"] = current_time
+        
+
+
         # Lineage log table
         lineage_df = pd.DataFrame(lineage_entries)
         lineage_df["lineage_log_id"] = range(1, len(lineage_df) + 1)
@@ -290,7 +314,25 @@ class Transformer:
                     "transformation": f"created_{table_name}",
                     "timestamp": current_time
                 }])], ignore_index=True)
-        
+
+        # Add lineage entries for aggregates
+        lineage_df = pd.concat([lineage_df, pd.DataFrame([{
+            "lineage_log_id": len(lineage_df) + 1,
+            "lineage_id": revenue_by_genre_lineage_id,
+            "source_path": str(self.bronze_file_path),
+            "stage": "gold",
+            "transformation": "aggregated_revenue_by_genre",
+            "timestamp": current_time
+        }, {
+            "lineage_log_id": len(lineage_df) + 2,
+            "lineage_id": avg_score_by_year_lineage_id,
+            "source_path": str(self.bronze_file_path),
+            "stage": "gold",
+            "transformation": "aggregated_avg_score_by_year",
+            "timestamp": current_time
+        }])], ignore_index=True)
+
+        # Return all gold tables, including aggregates
         return {
             "fact_movie_metrics": fact_movie_metrics,
             "dim_movie": dim_movie,
@@ -301,5 +343,7 @@ class Transformer:
             "dim_genre": dim_genre,
             "bridge_movie_genre": bridge_movie_genre,
             "bridge_movie_crew": bridge_movie_crew,
+            "revenue_by_genre": revenue_by_genre,
+            "avg_score_by_year": avg_score_by_year,
             "lineage_log": lineage_df
         }
