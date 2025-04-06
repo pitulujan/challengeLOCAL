@@ -1,6 +1,10 @@
-import logging
 from sqlalchemy import create_engine, Table, MetaData
 from sqlalchemy.dialects.postgresql import insert
+import logging
+from sqlalchemy.orm import Session
+from movies_data_pipeline.data_access.vector_db import VectorDB
+from movies_data_pipeline.data_access.database import get_session_direct
+from typing import Dict
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -37,48 +41,60 @@ class Loader:
             "lineage_log": ["lineage_log_id"]  # Use primary key since no business constraint
         }
 
-        with self.db_engine.connect() as conn:
-            with conn.begin():  # Start a transaction
-                for table_name in table_order:
-                    if table_name in gold_tables:
-                        df = gold_tables[table_name]
-                        if df.empty:
-                            logger.info(f"No data to load for {table_name}; skipping")
-                            continue
+        try:
 
-                        try:
-                            # Get the table object from the database
-                            table = Table(table_name, self.metadata, autoload_with=self.db_engine)
-                            constraint_cols = unique_constraints[table_name]
+            with self.db_engine.connect() as conn:
+                with conn.begin():  # Start a transaction
+                    for table_name in table_order:
+                        if table_name in gold_tables:
+                            df = gold_tables[table_name]
+                            if df.empty:
+                                logger.info(f"No data to load for {table_name}; skipping")
+                                continue
 
-                            # Get the list of columns in the database table
-                            db_columns = [c.name for c in table.columns]
+                            try:
+                                # Get the table object from the database
+                                table = Table(table_name, self.metadata, autoload_with=self.db_engine)
+                                constraint_cols = unique_constraints[table_name]
 
-                            # Filter DataFrame to include only columns that exist in the database
-                            df = df[[col for col in df.columns if col in db_columns]]
+                                # Get the list of columns in the database table
+                                db_columns = [c.name for c in table.columns]
 
-                            # Convert DataFrame to list of dictionaries for SQLAlchemy
-                            records = df.to_dict("records")
+                                # Filter DataFrame to include only columns that exist in the database
+                                df = df[[col for col in df.columns if col in db_columns]]
 
-                            # Prepare the upsert statement
-                            stmt = insert(table).values(records)
-                            if table_name == "lineage_log":
-                                # For lineage_log, append-only (no updates)
-                                stmt = stmt.on_conflict_do_nothing(
-                                    index_elements=constraint_cols
-                                )
-                            else:
-                                # For other tables, update on conflict
-                                table_columns = [c.name for c in table.columns]
-                                set_ = {col: stmt.excluded[col] for col in table_columns if col in df.columns and col not in constraint_cols}
-                                stmt = stmt.on_conflict_do_update(
-                                    index_elements=constraint_cols,
-                                    set_=set_
-                                )
+                                # Convert DataFrame to list of dictionaries for SQLAlchemy
+                                records = df.to_dict("records")
 
-                            # Execute the upsert
-                            result = conn.execute(stmt)
-                            logger.info(f"Upserted {table_name} into PostgreSQL with {len(df)} records (rows affected: {result.rowcount})")
-                        except Exception as e:
-                            logger.error(f"Failed to upsert {table_name}: {str(e)}")
-                            raise
+                                # Prepare the upsert statement
+                                stmt = insert(table).values(records)
+                                if table_name == "lineage_log":
+                                    # For lineage_log, append-only (no updates)
+                                    stmt = stmt.on_conflict_do_nothing(
+                                        index_elements=constraint_cols
+                                    )
+                                else:
+                                    # For other tables, update on conflict
+                                    table_columns = [c.name for c in table.columns]
+                                    set_ = {col: stmt.excluded[col] for col in table_columns if col in df.columns and col not in constraint_cols}
+                                    stmt = stmt.on_conflict_do_update(
+                                        index_elements=constraint_cols,
+                                        set_=set_
+                                    )
+
+                                # Execute the upsert
+                                result = conn.execute(stmt)
+                                logger.info(f"Upserted {table_name} into PostgreSQL with {len(df)} records (rows affected: {result.rowcount})")
+                            except Exception as e:
+                                logger.error(f"Failed to upsert {table_name}: {str(e)}")
+                                raise
+
+                # Create a session from the engine and sync Typesense
+                with Session(self.db_engine) as session:
+                    vector_db = VectorDB(initialize=False, db_session=session)
+                    vector_db._sync_with_gold()
+                    logger.info("Synced Typesense with gold layer data")
+
+        except Exception as e:
+            logger.error(f"Error during load_gold: {str(e)}")
+            raise

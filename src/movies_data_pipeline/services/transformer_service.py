@@ -4,14 +4,18 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import os
+from movies_data_pipeline.data_access.vector_db import VectorDB
+from movies_data_pipeline.data_access.database import get_session_direct 
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 class Transformer:
-    def __init__(self, bronze_file_path: str):
+    def __init__(self, bronze_file_path: str, db_session: Session = None):
         """Initialize the Transformer with bronze file path."""
         self.bronze_file_path = Path(bronze_file_path)
         self.silver_file_path = Path(os.getenv("SILVER_BASE_PATH")) / "silver_movies.parquet"
+        self.db_session = db_session  
 
 
     def transform(self) -> Dict[str, pd.DataFrame]:
@@ -37,7 +41,7 @@ class Transformer:
         
         # Create gold tables
         gold_tables = self._create_gold_tables(silver_df, lineage_entries)
-        
+      
         logger.info("Transformation completed successfully")
         return gold_tables
 

@@ -4,24 +4,29 @@ from movies_data_pipeline.domain.models.movie import Movie
 from typing import List
 
 class SearchController:
-    def __init__(self):
+    def __init__(self, db_session=None):
         self.router = APIRouter()
-        self.search_service = SearchService()
+        self.search_service = SearchService(db_session=db_session)
         self._register_routes()
 
     def _register_routes(self):
         @self.router.get("/", response_model=List[Movie])
-        def search_movies(query: str, limit: int = 10, offset: int = 0) -> List[Movie]:
+        def search_movies(
+            query: str,
+            genre: str = None,
+            limit: int = 10,
+            offset: int = 0
+        ) -> List[Movie]:
             """
-            Search for movies using Typesense with pagination.
+            Search movies with optional genre filter and pagination.
 
             Args:
-                query (str): The search query.
-                limit (int): Number of results to return (default: 10).
-                offset (int): Offset for pagination (default: 0).
+                query (str): Search query.
+                genre (str, optional): Filter by genre.
+                limit (int): Results per page (default: 10).
+                offset (int): Pagination offset (default: 0).
 
             Returns:
-                List[Movie]: List of matching movies.
+                List[Movie]: Matching movies.
             """
-            movies = self.search_service.search_movies(query, limit, offset)
-            return movies
+            return self.search_service.search_movies(query, limit, offset, genre)
