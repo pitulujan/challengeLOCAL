@@ -27,9 +27,9 @@ class InitializeService:
             "orig_title": str,
             "overview": str,
             "status": str,
-            "date_x": str,  # Raw date string, processed in silver
-            "genre": str,   # Comma-separated string
-            "crew": str,    # Comma-separated string
+            "date_x": str,  
+            "genre": str,   
+            "crew": str,    
             "country": str,
             "orig_lang": str,
             "budget_x": float,
@@ -44,9 +44,9 @@ class InitializeService:
             "orig_title": str,
             "overview": str,
             "status": str,
-            "date_x": "datetime64[ns]",  # Processed datetime
-            "genre_list": object,        # List of genres
-            "crew_pairs": object,        # List of dicts with actor_name, character_name
+            "date_x": "datetime64[ns]", 
+            "genre_list": object,        
+            "crew_pairs": object,        
             "country": str,
             "orig_lang": str,
             "budget_x": float,

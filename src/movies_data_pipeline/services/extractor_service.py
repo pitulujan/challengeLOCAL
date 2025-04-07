@@ -19,6 +19,8 @@ class Extractor:
             df = pd.read_csv(file_path)
         elif file_type == "json":
             df = pd.read_json(file_path)
+        elif file_type == "parquet":
+            df = pd.read_parquet(file_path)
         elif file_type == "pdf":
             df = pd.DataFrame()
             logger.warning(f"PDF extraction not implemented for {filename}; returning empty DataFrame")

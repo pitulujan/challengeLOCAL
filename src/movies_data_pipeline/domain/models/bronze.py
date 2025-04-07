@@ -3,7 +3,6 @@ from datetime import date
 from pydantic import BaseModel
 
 class BronzeMovieUpdate(BaseModel):
-    uuid: str  # Required field for bronze updates, this give as flexibility to update just one or a fez records without the need of all the keys 
     name: Optional[str] = None
     orig_title: Optional[str] = None
     overview: Optional[str] = None

@@ -7,6 +7,8 @@ from movies_data_pipeline.domain.models.bronze import BronzeMovieUpdate
 import logging
 from pathlib import Path
 import os
+import pandas as pd
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,37 @@ class CrudController:
                 raise HTTPException(status_code=404, detail=str(e))
             except Exception as e:
                 logger.error(f"Failed to update bronze data: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
+            
+        @self.router.post("/data/", response_model=Dict[str, str])
+        async def create_bronze_data(
+            data: Union[Dict[str, Any], List[Dict[str, Any]]],
+            background_tasks: BackgroundTasks,
+            bronze_service: BronzeService = Depends(self.get_bronze_service)
+        ):
+            """Create new bronze records from JSON data and process in the background."""
+            try:
+                # Convert JSON to DataFrame
+                if isinstance(data, dict):
+                    df = pd.DataFrame([data])
+                else:
+                    df = pd.DataFrame(data)
+
+                if df.empty:
+                    raise ValueError("No data provided in the request")
+
+                # Save to a temporary Parquet file
+                temp_file_path = f"/tmp/new_data_{int(datetime.now().timestamp())}.parquet"
+                df.to_parquet(temp_file_path)
+
+                # Schedule transformation and loading in the background
+                background_tasks.add_task(bronze_service.process_bronze_data, temp_file_path)
+                return {"message": f"Added {len(df) } new record(s) to bronze and ETL processing started"}
+            except ValueError as e:
+                logger.error(f"Invalid data: {str(e)}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to create bronze data: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.router.delete("/data/{bronze_id}", response_model=Dict[str, str])

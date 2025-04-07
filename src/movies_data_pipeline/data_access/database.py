@@ -14,16 +14,16 @@ if not DATABASE_URL:
 
 # Configure logging
 logger = logging.getLogger(__name__)
-logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)  # Adjust based on needs
+logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO) 
 
 # Create engine with connection pooling
 engine = create_engine(
     DATABASE_URL,
-    echo=False,  # Set to True for debugging
-    pool_pre_ping=True,  # Check connection health
-    pool_recycle=3600,   # Recycle connections every hour
-    pool_size=5,         # Base pool size
-    max_overflow=10      # Allow overflow for bursts
+    echo=False,  
+    pool_pre_ping=True, 
+    pool_recycle=3600,   
+    pool_size=5,         
+    max_overflow=10      
 )
 
 def init_db():

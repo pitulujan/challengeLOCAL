@@ -19,7 +19,7 @@ class Loader:
 
     def load_gold(self, gold_tables: dict):
         """Load gold tables into PostgreSQL database using upsert on unique constraints."""
-        # Define table categories
+        
         dimension_tables = [
             "dim_movie", "dim_date", "dim_country", "dim_language", "dim_crew", "dim_genre"
         ]
@@ -48,8 +48,8 @@ class Loader:
             id_mappings = {}  # To store lineage_id to generated ID mappings
 
             with self.db_engine.connect() as conn:
-                with conn.begin():  # Start a transaction
-                    # Step 1: Upsert dimension tables and retrieve IDs
+                with conn.begin():  
+                    # Upsert dimension tables and retrieve IDs
                     for table_name in dimension_tables:
                         if table_name in gold_tables:
                             df = gold_tables[table_name]
@@ -72,7 +72,7 @@ class Loader:
                             mapping_df = pd.read_sql(f"SELECT {id_col}, lineage_id FROM {table_name}", conn)
                             id_mappings[table_name] = dict(zip(mapping_df["lineage_id"], mapping_df[id_col]))
 
-                    # Step 2: Populate foreign keys and upsert bridge/fact tables
+                    # Populate foreign keys and upsert bridge/fact tables
                     for table_name in bridge_fact_tables:
                         if table_name in gold_tables:
                             df = gold_tables[table_name]
@@ -106,7 +106,7 @@ class Loader:
                             conn.execute(stmt)
                             logger.info(f"Upserted {table_name} with {len(df)} records")
 
-                    # Step 3: Upsert other tables (e.g., lineage_log)
+                    # Upsert other tables (e.g., lineage_log)
                     for table_name in other_tables:
                         if table_name in gold_tables:
                             df = gold_tables[table_name]
@@ -130,7 +130,7 @@ class Loader:
                             conn.execute(stmt)
                             logger.info(f"Upserted {table_name} with {len(df)} records")
 
-                # Sync with Typesense (if applicable)
+                # Sync with Typesense
                 with Session(self.db_engine) as session:
                     vector_db = VectorDB(initialize=False, db_session=session)
                     logger.info(f"Initializing sync with gold layer")

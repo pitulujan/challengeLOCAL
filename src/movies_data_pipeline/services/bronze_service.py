@@ -57,33 +57,7 @@ class BronzeService:
         logger.info(f"Fetched {len(paginated_df)} records from bronze (page {page}, size {page_size})")
         return paginated_df, page, page_size, total_records, total_pages
 
-    def update_bronze(self, updates: List[BronzeMovieUpdate]) -> None:
-        """Update bronze records by bronze_id, modifying only provided keys."""
-        if not self.bronze_file_path.exists():
-            raise ValueError("Bronze data not found")
-        
-        df = pd.read_parquet(self.bronze_file_path)
-        updated_ids = {update.bronze_id for update in updates}  # Assuming BronzeMovieUpdate now uses bronze_id
-        missing_ids = updated_ids - set(df["bronze_id"])
-        if missing_ids:
-            raise ValueError(f"bronze_ids not found in bronze: {missing_ids}")
-        
-        # Convert updates to a dictionary for merging
-        update_dicts = {update.bronze_id: update.dict(exclude_unset=True) for update in updates}
-        
-        # Update only the specified fields for matching bronze_ids
-        for bronze_id, update_data in update_dicts.items():
-            mask = df["bronze_id"] == bronze_id
-            for key, value in update_data.items():
-                if key != "bronze_id":  # Skip bronze_id field itself during update
-                    df.loc[mask, key] = value
-        
-        df.to_parquet(self.bronze_file_path)
-        gold_tables = self.etl_service.transform()
-        if gold_tables:
-            self.etl_service.load(gold_tables)
-        logger.info(f"Updated {len(updates)} bronze records and triggered ETL")
-
+       
     def delete_bronze(self, bronze_id: int) -> None:
         """Delete a bronze record by bronze_id and reprocess ETL."""
         if not self.bronze_file_path.exists():
